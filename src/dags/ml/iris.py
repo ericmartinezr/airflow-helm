@@ -329,7 +329,7 @@ def iris():
             y_pred = model.predict(X_test)
             clases = sorted(y_test.unique().tolist())
 
-            # ——— Cálculo de métricas ———
+            # Cálculo de métricas
             acc = accuracy_score(y_test, y_pred)
             precision_macro = precision_score(y_test, y_pred, average="macro")
             recall_macro = recall_score(y_test, y_pred, average="macro")
@@ -354,7 +354,7 @@ def iris():
                     f"(exactitud={acc:.4f} < 0.8)"
                 )
 
-            # ——— Registra métricas y artefactos en el run existente ———
+            # Registra métricas y artefactos en el run existente
             client = MlflowClient()
             client.set_tag(run_id, "etapa", "evaluacion")
             client.set_tag(run_id, "evaluacion.resultado", "aprobado")
