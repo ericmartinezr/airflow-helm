@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+  namespace: airflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlflow
+  template:
+    metadata:
+      labels:
+        app: mlflow
+    spec:
+      containers:
+        - name: mlflow
+          image: ghcr.io/mlflow/mlflow:v3.10.1-full
+          ports:
+            - containerPort: 5000
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: database-cluster-superuser
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database-cluster-superuser
+                  key: password
+          command:
+            - /bin/bash
+            - -c
+            - |
+              mlflow server \
+                --host 0.0.0.0 \
+                --port 5000 \
+                --backend-store-uri "postgresql://${DB_USER}:${DB_PASSWORD}@database-cluster-rw.database.svc.cluster.local:5432/mlflow_db" \
+                --default-artifact-root /opt/airflow/mlruns \
+                --allowed-hosts '*' \
+                --cors-allowed-origins '*'
