@@ -4,8 +4,33 @@ from datetime import timedelta
 from airflow.sdk import dag, task, Variable
 from airflow.exceptions import AirflowSkipException
 from airflow.providers.standard.hooks.filesystem import FSHook
+from airflow.providers.standard.operators.python import get_current_context
 
 logger = logging.getLogger(__name__)
+
+
+def configure_expectations():
+    import great_expectations as gx
+
+    suite = gx.ExpectationSuite(name="iris-gx-suite")
+    suite.add_expectation(
+        gx.expectations.ExpectColumnValuesToNotBeNull(
+            column="sepal length (cm)")
+    )
+    suite.add_expectation(
+        gx.expectations.ExpectColumnValuesToNotBeNull(
+            column="sepal length (cm)")
+    )
+    suite.add_expectation(
+        gx.expectations.ExpectColumnValuesToNotBeNull(
+            column="petal length (cm)")
+    )
+    suite.add_expectation(
+        gx.expectations.ExpectColumnValuesToNotBeNull(
+            column="petal width (cm)")
+    )
+
+    return suite
 
 
 @dag(
@@ -26,13 +51,14 @@ logger = logging.getLogger(__name__)
 def iris():
 
     @task()
-    def extract_data(**context):
+    def extract_data():
         """
         Extrae datos con los que se entrenará al modelo
         """
         from sklearn.datasets import load_iris
 
         try:
+            context = get_current_context()
             ds = context["logical_date"].format("YYYYMMDD")
             hook = FSHook(fs_conn_id="temp_files")
             file_name = f"{hook.get_path()}/iris_{ds}.csv"
@@ -49,31 +75,34 @@ def iris():
             logger.error(e, exc_info=True)
             raise AirflowSkipException
 
-    @task()
+    @task.short_circuit()
     def validate_data(file_name: str):
-        """
-        Valida que los datos sean correctos
-        """
-        # TODO: Usar técnicas mas avanzadas (e.g., Great Expectations, validaciones estadísticas, validacion de esquema, etc)
         import pandas as pd
+        import great_expectations as gx
 
-        try:
-            df = pd.read_csv(file_name)
-            assert not df.isnull().values.any()
-            assert len(df) > 0
-        except Exception as e:
-            logger.error("Error validating data")
-            logger.error(e, exc_info=True)
-            raise AirflowSkipException
+        df = pd.read_csv(file_name)
+        context = gx.get_context(mode="ephemeral")
+        suite = context.suites.add(configure_expectations())
+        datasource = context.data_sources.add_pandas(name="pandas_source")
+        data_asset = datasource.add_dataframe_asset(
+            name="iris_df_data_asset"
+        )
+        batch_definition = data_asset.add_batch_definition_whole_dataframe(
+            "Iris Definition"
+        )
+        batch = batch_definition.get_batch({"dataframe": df})
+        expectation = batch.validate(suite)
+        return expectation.get("success")
 
     @task()
-    def feature_engineering(**context):
+    def feature_engineering():
         """
         Ingeniería de características
         """
         import pandas as pd
 
         try:
+            context = get_current_context()
             ds = context["logical_date"].format("YYYYMMDD")
             hook = FSHook(fs_conn_id="temp_files")
             file_name = context["ti"].xcom_pull(task_ids="extract_data")
@@ -92,7 +121,7 @@ def iris():
             raise AirflowSkipException
 
     @task(max_active_tis_per_dag=1)
-    def train_model(**context):
+    def train_model():
         """
         Entrenamiento del modelo con MLFlow.
 
@@ -103,8 +132,6 @@ def iris():
         """
         import tempfile
         import os
-        import platform
-        import sklearn
         import pandas as pd
         import mlflow
         import mlflow.sklearn
@@ -123,6 +150,7 @@ def iris():
             mlflow.sklearn.autolog(
                 log_model_signatures=True, log_input_examples=True)
 
+            context = get_current_context()
             ds = context["logical_date"].format("YYYYMMDD")
             dag_run_id = context["run_id"]
             features_file_name = context["ti"].xcom_pull(
@@ -194,24 +222,7 @@ def iris():
                     "Incluye ingeniería de características (sepal_ratio). "
                     f"Fecha lógica del pipeline: {ds}. "
                     f"Run de Airflow: {dag_run_id}."
-                ),
-                tags={
-                    # Contexto Airflow
-                    "airflow.dag_id": "iris",
-                    "airflow.run_id": dag_run_id,
-                    "airflow.tarea": "train_model",
-                    "airflow.fecha_logica": ds,
-                    # Información del modelo
-                    "modelo.algoritmo": "RandomForestClassifier",
-                    "modelo.framework": "scikit-learn",
-                    "modelo.version_sklearn": sklearn.__version__,
-                    "modelo.version_python": platform.python_version(),
-                    "modelo.problema": "clasificacion-multiclase",
-                    "modelo.clases": str(clases),
-                    # Ciclo de vida
-                    "etapa": "entrenamiento",
-                    "dataset": "iris",
-                }
+                )
             ) as active_run:
                 logger.info(f"Run activo: {active_run.info.run_id}")
 
@@ -221,21 +232,9 @@ def iris():
                     "algoritmo": "RandomForestClassifier",
                     "n_estimators": model.n_estimators,
                     "max_depth": str(model.max_depth),
-                    "min_samples_split": model.min_samples_split,
-                    "min_samples_leaf": model.min_samples_leaf,
-                    "max_features": str(model.max_features),
-                    "criterion": model.criterion,
-                    "bootstrap": model.bootstrap,
                     "random_state": RANDOM_STATE,
-                    # Parámetros del split
                     "test_size": TEST_SIZE,
                     "train_size": 1 - TEST_SIZE,
-                    "n_muestras_total": len(df),
-                    "n_muestras_entrenamiento": len(X_train),
-                    "n_muestras_prueba": len(X_test),
-                    "n_caracteristicas": X.shape[1],
-                    "n_clases": len(clases),
-                    "caracteristicas_ingenieria": "sepal_ratio",
                     "fuente_datos": features_file_name,
                 })
 
@@ -467,10 +466,7 @@ def iris():
             )
             for clave, valor in {
                 "algoritmo": "RandomForestClassifier",
-                "framework": "scikit-learn",
-                "problema": "clasificacion-multiclase",
                 "dataset": "iris",
-                "equipo": "mlops",
                 "pipeline": "airflow-ml-iris",
             }.items():
                 client.set_registered_model_tag(NOMBRE_MODELO, clave, valor)
@@ -488,10 +484,6 @@ def iris():
             )
             client.set_model_version_tag(
                 NOMBRE_MODELO, version, "run_id", run_id)
-            client.set_model_version_tag(
-                NOMBRE_MODELO, version, "aprobado", "true")
-            client.set_model_version_tag(
-                NOMBRE_MODELO, version, "etapa", "registro")
 
             # Marca el run como completado
             client.set_tag(run_id, "etapa", "registro")

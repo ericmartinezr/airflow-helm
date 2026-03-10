@@ -80,7 +80,7 @@ airflowVersion: '3.1.7'
 images:
   airflow:
     repository: airflow-custom
-    tag: 0.0.1
+    tag: 0.0.2
     # Specifying digest takes precedence over tag.
     digest: ~
     pullPolicy: IfNotPresent
