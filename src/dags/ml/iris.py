@@ -92,6 +92,9 @@ def iris():
         )
         batch = batch_definition.get_batch({"dataframe": df})
         expectation = batch.validate(suite)
+
+        logger.info(f"Expectation result: \n{expectation}")
+
         return expectation.get("success")
 
     @task()
@@ -134,7 +137,7 @@ def iris():
         import os
         import pandas as pd
         import mlflow
-        import mlflow.sklearn
+        from mlflow import sklearn
         from mlflow.tracking import MlflowClient
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.model_selection import train_test_split
@@ -147,7 +150,7 @@ def iris():
                 )
 
             mlflow.set_tracking_uri(mlflow_tracking_url)
-            mlflow.sklearn.autolog(
+            sklearn.autolog(
                 log_model_signatures=True, log_input_examples=True)
 
             context = get_current_context()
@@ -160,7 +163,6 @@ def iris():
 
             X = df.drop("target", axis=1)
             y = df["target"]
-            clases = sorted(y.unique().tolist())
 
             # El split ocurre UNA sola vez aquí.
             # Los artefactos resultantes son consumidos por evaluate_model
@@ -198,21 +200,6 @@ def iris():
                 value="Experimento de clasificación de flores Iris usando RandomForestClassifier. "
                       "Pipeline orquestado con Apache Airflow."
             )
-            client.set_experiment_tag(
-                experiment_id=experiment.experiment_id,
-                key="proyecto",
-                value="iris-ml"
-            )
-            client.set_experiment_tag(
-                experiment_id=experiment.experiment_id,
-                key="equipo",
-                value="mlops"
-            )
-            client.set_experiment_tag(
-                experiment_id=experiment.experiment_id,
-                key="problema",
-                value="clasificacion-multiclase"
-            )
 
             with mlflow.start_run(
                 experiment_id=experiment.experiment_id,
@@ -239,7 +226,7 @@ def iris():
                 })
 
                 model.fit(X_train, y_train)
-                mlflow.sklearn.log_model(model, name="model")
+                sklearn.log_model(model, name="model")
 
                 # Lineage: registra qué datos se usaron para entrenar y testear
                 mlflow.log_input(train_dataset, context="entrenamiento",
@@ -293,8 +280,8 @@ def iris():
         import os
         import pandas as pd
         import mlflow
-        import mlflow.sklearn
         import mlflow.artifacts
+        from mlflow import sklearn
         from mlflow.tracking import MlflowClient
         from sklearn.metrics import (
             accuracy_score,
@@ -324,7 +311,7 @@ def iris():
             X_test = pd.read_parquet(X_test_path)
             y_test = pd.read_parquet(y_test_path).squeeze()
 
-            model = mlflow.sklearn.load_model(f"runs:/{run_id}/model")
+            model = sklearn.load_model(f"runs:/{run_id}/model")
             y_pred = model.predict(X_test)
             clases = sorted(y_test.unique().tolist())
 
@@ -364,9 +351,6 @@ def iris():
             client.log_metric(run_id, "precision_macro", precision_macro)
             client.log_metric(run_id, "recall_macro", recall_macro)
             client.log_metric(run_id, "f1_macro", f1_macro)
-            client.log_metric(run_id, "precision_ponderada", precision_pond)
-            client.log_metric(run_id, "recall_ponderado", recall_pond)
-            client.log_metric(run_id, "f1_ponderado", f1_pond)
 
             # Métricas por clase
             prec_por_clase = precision_score(
@@ -418,8 +402,8 @@ def iris():
         """
         import pandas as pd
         import mlflow
-        import mlflow.sklearn
         import mlflow.artifacts
+        from mlflow import sklearn
         from mlflow.models import infer_signature
         from mlflow.tracking import MlflowClient
 
@@ -440,11 +424,11 @@ def iris():
             )
             X_test = pd.read_parquet(X_test_path)
 
-            model = mlflow.sklearn.load_model(f"runs:/{run_id}/model")
+            model = sklearn.load_model(f"runs:/{run_id}/model")
             y_pred = model.predict(X_test)
             signature = infer_signature(X_test, y_pred)
 
-            model_info = mlflow.sklearn.log_model(
+            model_info = sklearn.log_model(
                 sk_model=model,
                 name="iris-model",
                 signature=signature,
