@@ -1,0 +1,86 @@
+{
+  "title": "Airflow Learning Dashboard",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Total DAGs",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "airflow_dagbag_size",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Scheduler Heartbeat",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "max(airflow_scheduler_heartbeat)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Executor Tasks",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "airflow_executor_running_tasks",
+          "legendFormat": "running",
+          "refId": "A"
+        },
+        {
+          "expr": "airflow_executor_queued_tasks",
+          "legendFormat": "queued",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Task Success vs Failures",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(airflow_ti_successes[5m])",
+          "legendFormat": "success",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(airflow_ti_failures[5m])",
+          "legendFormat": "failures",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "barchart",
+      "title": "Tasks Executed Per DAG",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (dag_id) (rate(airflow_ti_successes[5m]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "DAG Run Duration",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "airflow_dagrun_duration_success",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

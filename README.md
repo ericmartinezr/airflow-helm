@@ -431,6 +431,20 @@ prometheus-node-exporter:
     enabled: false
 ```
 
+También agrega la siguiente configuración de scraping para capturar las métricas de Airflow
+
+```sh
+additionalScrapeConfigs:
+  - job_name: airflow-statsd
+    scrape_interval: 10s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - airflow-statsd.airflow.svc.cluster.local:9102
+```
+
+Luego en grafana genera un nuevo dashboard con la configuración descrita en el archivo **[grafana-airflow-dashboard.json](grafana-airflow-dashboard.json)** _(Nota: el dashboard no pretende ser productivo, sino demostrativo del funcionamiento)_
+
 **4. Aplicar los Nuevos Valores**
 
 Aplica la actualización utilizando el nuevo archivo de configuración en el clúster:
