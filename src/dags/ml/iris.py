@@ -479,6 +479,17 @@ def iris():
                 f"exitosamente (run_id={run_id})"
             )
 
+            return run_id
+
+        except Exception as e:
+            logger.error("Error registrando el modelo")
+            logger.error(e, exc_info=True)
+            raise AirflowSkipException
+
+    @task()
+    def deploy_model(run_id: str):
+        try:
+
         except Exception as e:
             logger.error("Error registrando el modelo")
             logger.error(e, exc_info=True)
@@ -490,8 +501,9 @@ def iris():
     _train_model = train_model()
     _evaluate_model = evaluate_model(run_id=_train_model)
     _register_model = register_model(run_id=_evaluate_model)
+    _deploy_model = deploy_model(run_id=_register_model)
 
-    _validate_data >> _feature_engineering >> _train_model >> _evaluate_model >> _register_model
+    _validate_data >> _feature_engineering >> _train_model >> _evaluate_model >> _register_model >> _deploy_model
 
 
 iris()
