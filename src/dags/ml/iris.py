@@ -5,6 +5,8 @@ from airflow.sdk import dag, task, Variable
 from airflow.exceptions import AirflowSkipException, AirflowFailException
 from airflow.providers.standard.hooks.filesystem import FSHook
 from airflow.providers.standard.operators.python import get_current_context
+from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
+
 
 logger = logging.getLogger(__name__)
 
@@ -520,27 +522,48 @@ def iris():
             logger.error(e, exc_info=True)
             raise AirflowFailException
 
-    @task()
-    def deploy_model(run_id: str):
-        try:
-            import mlflow
+    @task.bash
+    def generate_dockerfile(run_id: str):
+        return f"mlflow models generate-dockerfile -m runs:/{run_id}/model -d ./my_output_dir"
 
-            mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
-            if not mlflow_tracking_url:
-                raise ValueError(
-                    "Debes configurar la URL de tracking de MLFlow"
-                )
+    deploy_model = KubernetesPodOperator(
+        task_id="deploy_model",
+        name="buildah-build",
+        image="quay.io/buildah/stable:v1.40",  # 2026 stable version
+        cmds=["buildah", "bud"],
+        arguments=[
+            "--storage-driver=vfs",
+            "-t", "my-registry.com/iris-model:latest",
+            "./my_output_dir"
+        ],
+        # Buildah needs minimal extra caps to run rootless
+        container_security_context={
+            "capabilities": {"add": ["SETGID", "SETUID"]}
+        },
+        namespace="airflow",
+    )
 
-            mlflow.set_tracking_uri(mlflow_tracking_url)
-            mlflow.models.build_docker(
-                model_uri=f"runs:/{run_id}/model",
-                name="iris-model-img",
-                enable_mlserver=True
-            )
-        except Exception as e:
-            logger.error("Error desplegando el modelo")
-            logger.error(e, exc_info=True)
-            raise AirflowSkipException
+    # @task()
+    # def deploy_model(run_id: str):
+    #    try:
+    #        import mlflow
+#
+    #        mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
+    #        if not mlflow_tracking_url:
+    #            raise ValueError(
+    #                "Debes configurar la URL de tracking de MLFlow"
+    #            )
+#
+    #        mlflow.set_tracking_uri(mlflow_tracking_url)
+    #        mlflow.models.build_docker(
+    #            model_uri=f"runs:/{run_id}/model",
+    #            name="iris-model-img",
+    #            enable_mlserver=True
+    #        )
+    #    except Exception as e:
+    #        logger.error("Error desplegando el modelo")
+    #        logger.error(e, exc_info=True)
+    #        raise AirflowSkipException
 
     _extract_data = extract_data()
     _validate_data = validate_data(file_name=_extract_data)
@@ -549,7 +572,7 @@ def iris():
     _evaluate_model = evaluate_model(run_id=_train_model)
     _register_model = register_model(run_id=_evaluate_model)
     _test_model = test_model(run_id=_register_model)
-    _deploy_model = deploy_model(run_id=_test_model)
+    _generate_dockerfile = generate_dockerfile(run_id=_test_model)
 
     (
         _validate_data >>
@@ -558,7 +581,8 @@ def iris():
         _evaluate_model >>
         _register_model >>
         _test_model >>
-        _deploy_model
+        _generate_dockerfile >>
+        deploy_model
     )
 
 
