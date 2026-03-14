@@ -514,14 +514,14 @@ def iris():
             pred = model.predict(df)
             print(pred)
 
-            return model.model_id
+            return run_id
         except Exception as e:
             logger.error("Error probando el modelo")
             logger.error(e, exc_info=True)
             raise AirflowFailException
 
     @task()
-    def deploy_model(model_id: str):
+    def deploy_model(run_id: str):
         try:
             import mlflow
 
@@ -533,7 +533,7 @@ def iris():
 
             mlflow.set_tracking_uri(mlflow_tracking_url)
             mlflow.models.build_docker(
-                model_uri=f"runs:/{model_id}",
+                model_uri=f"runs:/{run_id}/model",
                 name="iris-model-img",
                 enable_mlserver=True
             )
@@ -549,7 +549,7 @@ def iris():
     _evaluate_model = evaluate_model(run_id=_train_model)
     _register_model = register_model(run_id=_evaluate_model)
     _test_model = test_model(run_id=_register_model)
-    _deploy_model = deploy_model(model_id=_test_model)
+    _deploy_model = deploy_model(run_id=_test_model)
 
     (
         _validate_data >>
