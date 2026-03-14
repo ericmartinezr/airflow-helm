@@ -543,12 +543,12 @@ Lista consolidada de todos los comandos necesarios para redirigir los puertos y 
 ```sh
 # Apache Airflow (UI / API Server)
 # Acceso: http://localhost:8080
-kubectl port-forward svc/airflow-api-server 8080:8080 --namespace airflow
+kubectl port-forward svc/airflow-api-server 8080:8080 --namespace airflow &
 
 # MLflow (Tracking Server)
 # Acceso: http://localhost:30500
 # Nota: se usa el puerto 30500 porque el 5000 puede estar ocupado en Windows
-kubectl port-forward svc/mlflow 30500:5000 -n airflow
+kubectl port-forward svc/mlflow 30500:5000 -n airflow &
 
 # Grafana (Dashboard de Métricas)
 # Acceso: http://localhost:3100
@@ -557,7 +557,7 @@ export POD_NAME=$(kubectl get pods \
   --namespace grafana-ns \
   -l "app.kubernetes.io/name=grafana,app.kubernetes.io/instance=grafana" \
   -o jsonpath="{.items[0].metadata.name}")
-kubectl --namespace grafana-ns port-forward $POD_NAME 3100:3000
+kubectl --namespace grafana-ns port-forward $POD_NAME 3100:3000 &
 ```
 
 ---

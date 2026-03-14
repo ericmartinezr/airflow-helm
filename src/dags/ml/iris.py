@@ -272,7 +272,7 @@ def iris():
         por train_model. No vuelve a leer el CSV ni a recalcular el split.
         Registra métricas completas de evaluación:
           - Exactitud global
-          - Precisión, recall y F1 por clase (macro y ponderado)
+          - Precisión, recall y F1 por clase
           - Matriz de confusión como artefacto JSON
         """
         import json
@@ -320,10 +320,6 @@ def iris():
             precision_macro = precision_score(y_test, y_pred, average="macro")
             recall_macro = recall_score(y_test, y_pred, average="macro")
             f1_macro = f1_score(y_test, y_pred, average="macro")
-            precision_pond = precision_score(
-                y_test, y_pred, average="weighted")
-            recall_pond = recall_score(y_test, y_pred, average="weighted")
-            f1_pond = f1_score(y_test, y_pred, average="weighted")
             matriz = confusion_matrix(y_test, y_pred).tolist()
             reporte = classification_report(
                 y_test, y_pred,
@@ -487,12 +483,10 @@ def iris():
             raise AirflowSkipException
 
     @task()
-    def test_model():
+    def test_model(run_id: str):
         try:
-            import mlflow
+            from mlflow import sklearn
             import pandas as pd
-
-            NOMBRE_MODELO = "iris-random-forest-clasif-model"
 
             mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
             if not mlflow_tracking_url:
@@ -500,7 +494,7 @@ def iris():
                     "Debes configurar la URL de tracking de MLFlow"
                 )
 
-            model = mlflow.pyfunc.load_model(f"models:/{NOMBRE_MODELO}")
+            model = sklearn.load_model(f"runs:/{run_id}/model")
             df = pd.DataFrame(
                 [
                     [5.1, 3.5, 1.4, 0.2],
@@ -516,17 +510,17 @@ def iris():
             )
             pred = model.predict(df)
             print(pred)
+
+            return model.model_id
         except Exception as e:
             logger.error("Error probando el modelo")
             logger.error(e, exc_info=True)
             raise AirflowFailException
 
     @task()
-    def deploy_model():
+    def deploy_model(model_id: str):
         try:
             import mlflow
-
-            NOMBRE_MODELO = "iris-random-forest-clasif-model"
 
             mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
             if not mlflow_tracking_url:
@@ -536,12 +530,12 @@ def iris():
 
             mlflow.set_tracking_uri(mlflow_tracking_url)
             mlflow.models.build_docker(
-                model_uri=f"models:/{NOMBRE_MODELO}",
+                model_uri=f"runs:/{model_id}",
                 name="iris-model-img",
                 enable_mlserver=True
             )
         except Exception as e:
-            logger.error("Error registrando el modelo")
+            logger.error("Error desplegando el modelo")
             logger.error(e, exc_info=True)
             raise AirflowSkipException
 
@@ -551,8 +545,8 @@ def iris():
     _train_model = train_model()
     _evaluate_model = evaluate_model(run_id=_train_model)
     _register_model = register_model(run_id=_evaluate_model)
-    _test_model = test_model()
-    _deploy_model = deploy_model()
+    _test_model = test_model(run_id=_register_model)
+    _deploy_model = deploy_model(model_id=_test_model)
 
     (
         _validate_data >>
@@ -560,7 +554,8 @@ def iris():
         _train_model >>
         _evaluate_model >>
         _register_model >>
-        _test_model  # >> _deploy_model
+        _test_model >>
+        _deploy_model
     )
 
 
