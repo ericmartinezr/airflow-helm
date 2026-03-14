@@ -2,7 +2,7 @@ import logging
 import pendulum
 from datetime import timedelta
 from airflow.sdk import dag, task, Variable
-from airflow.exceptions import AirflowSkipException
+from airflow.exceptions import AirflowSkipException, AirflowFailException
 from airflow.providers.standard.hooks.filesystem import FSHook
 from airflow.providers.standard.operators.python import get_current_context
 
@@ -487,9 +487,59 @@ def iris():
             raise AirflowSkipException
 
     @task()
-    def deploy_model(run_id: str):
+    def test_model():
         try:
+            import mlflow
+            import pandas as pd
 
+            NOMBRE_MODELO = "iris-random-forest-clasif-model"
+
+            mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
+            if not mlflow_tracking_url:
+                raise ValueError(
+                    "Debes configurar la URL de tracking de MLFlow"
+                )
+
+            model = mlflow.pyfunc.load_model(f"models:/{NOMBRE_MODELO}")
+            df = pd.DataFrame(
+                [
+                    [5.1, 3.5, 1.4, 0.2],
+                    [6.2, 3.4, 5.4, 2.3],
+                    [5.9, 3.0, 4.2, 1.5]
+                ],
+                columns=[
+                    "sepal length (cm)",
+                    "sepal width (cm)",
+                    "petal length (cm)",
+                    "petal width (cm)"
+                ]
+            )
+            pred = model.predict(df)
+            print(pred)
+        except Exception as e:
+            logger.error("Error probando el modelo")
+            logger.error(e, exc_info=True)
+            raise AirflowFailException
+
+    @task()
+    def deploy_model():
+        try:
+            import mlflow
+
+            NOMBRE_MODELO = "iris-random-forest-clasif-model"
+
+            mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
+            if not mlflow_tracking_url:
+                raise ValueError(
+                    "Debes configurar la URL de tracking de MLFlow"
+                )
+
+            mlflow.set_tracking_uri(mlflow_tracking_url)
+            mlflow.models.build_docker(
+                model_uri=f"models:/{NOMBRE_MODELO}",
+                name="iris-model-img",
+                enable_mlserver=True
+            )
         except Exception as e:
             logger.error("Error registrando el modelo")
             logger.error(e, exc_info=True)
@@ -501,9 +551,17 @@ def iris():
     _train_model = train_model()
     _evaluate_model = evaluate_model(run_id=_train_model)
     _register_model = register_model(run_id=_evaluate_model)
-    _deploy_model = deploy_model(run_id=_register_model)
+    _test_model = test_model()
+    _deploy_model = deploy_model()
 
-    _validate_data >> _feature_engineering >> _train_model >> _evaluate_model >> _register_model >> _deploy_model
+    (
+        _validate_data >>
+        _feature_engineering >>
+        _train_model >>
+        _evaluate_model >>
+        _register_model >>
+        _test_model  # >> _deploy_model
+    )
 
 
 iris()
