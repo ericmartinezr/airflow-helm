@@ -524,7 +524,7 @@ def iris():
 
     @task.bash(
         env={
-            "MLFLOW_TRACKING_URI": "{{var.MLFlow_Tracking_URL}}"
+            "MLFLOW_TRACKING_URI": "{{var.value.MLFlow_Tracking_URL}}"
         }
     )
     def generate_dockerfile(run_id: str):
