@@ -524,7 +524,17 @@ def iris():
 
     @task.bash
     def generate_dockerfile(run_id: str):
-        return f"mlflow models generate-dockerfile -m runs:/{run_id}/model -d ./my_output_dir"
+        try:
+            mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
+            if not mlflow_tracking_url:
+                raise ValueError(
+                    "Debes configurar la URL de tracking de MLFlow"
+                )
+            return f"MLFLOW_TRACKING_URI={mlflow_tracking_url}; mlflow models generate-dockerfile -m runs:/{run_id}/model -d ./my_output_dir"
+        except Exception as e:
+            logger.error("Error generando el archivo docker")
+            logger.error(e, exc_info=True)
+            raise AirflowFailException
 
     deploy_model = KubernetesPodOperator(
         task_id="deploy_model",
