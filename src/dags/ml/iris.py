@@ -522,15 +522,14 @@ def iris():
             logger.error(e, exc_info=True)
             raise AirflowFailException
 
-    @task.bash
+    @task.bash(
+        env={
+            "MLFLOW_TRACKING_URI": "{{var.MLFlow_Tracking_URL}}"
+        }
+    )
     def generate_dockerfile(run_id: str):
         try:
-            mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
-            if not mlflow_tracking_url:
-                raise ValueError(
-                    "Debes configurar la URL de tracking de MLFlow"
-                )
-            return f"MLFLOW_TRACKING_URI={mlflow_tracking_url}; mlflow models generate-dockerfile -m runs:/{run_id}/model -d ./my_output_dir"
+            return f"mlflow models generate-dockerfile -m runs:/{run_id}/model -d ./my_output_dir"
         except Exception as e:
             logger.error("Error generando el archivo docker")
             logger.error(e, exc_info=True)
