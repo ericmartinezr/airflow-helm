@@ -485,8 +485,9 @@ def iris():
     @task()
     def test_model(run_id: str):
         try:
-            from mlflow import sklearn
+            import mlflow
             import pandas as pd
+            from mlflow import sklearn
 
             mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
             if not mlflow_tracking_url:
@@ -494,6 +495,7 @@ def iris():
                     "Debes configurar la URL de tracking de MLFlow"
                 )
 
+            mlflow.set_tracking_uri(mlflow_tracking_url)
             model = sklearn.load_model(f"runs:/{run_id}/model")
             df = pd.DataFrame(
                 [
