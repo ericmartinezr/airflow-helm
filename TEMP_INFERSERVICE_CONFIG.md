@@ -100,4 +100,51 @@ https://www.youtube.com/watch?v=MWfKAgEHsHo
 
 ---
 
-Give me the full step by step, very clearly and without verbosity, how to implement GCP as an artifact root (only the artifact, the backend is in my local postgresql) to save the artifacts with MLFlow so I can later deploy from GS the inference service with KServe pointing to that artifact folder
+# Pasar el key a un secret de kubernetes
+
+kubectl create secret generic gcp-mlflow-key \
+ --from-file=key.json=k8s-mlflow-key.json
+
+Mount the secret into the MLflow server pod
+
+In your MLflow deployment YAML:
+
+spec:
+containers:
+
+- name: mlflow
+  image: your-mlflow-image
+  volumeMounts:
+  - name: gcp-key
+    mountPath: /var/secrets/google
+    readOnly: true
+    env:
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: /var/secrets/google/key.json
+
+volumes: - name: gcp-key
+secret:
+secretName: gcp-mlflow-key
+
+This makes MLflow authenticate automatically with GCS.
+
+4. Mount the same secret into Airflow
+
+In your Airflow worker / scheduler deployment:
+
+spec:
+containers:
+
+- name: airflow-worker
+  image: your-airflow-image
+  volumeMounts:
+  - name: gcp-key
+    mountPath: /var/secrets/google
+    readOnly: true
+    env:
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: /var/secrets/google/key.json
+
+volumes: - name: gcp-key
+secret:
+secretName: gcp-mlflow-key
