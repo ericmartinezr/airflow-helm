@@ -561,6 +561,14 @@ export POD_NAME=$(kubectl get pods \
 kubectl --namespace grafana-ns port-forward $POD_NAME 3100:3000 &
 ```
 
+Comandos para detener los procesos
+
+```sh
+kill -9 $(lsof -t -i:8080)
+kill -9 $(lsof -t -i:30500)
+kill -9 $(lsof -t -i:3100)
+```
+
 ---
 
 > **Nota:** Los archivos de documentación correspondiente fueron generados o asistidos mediante el uso de inteligencia artificial.
