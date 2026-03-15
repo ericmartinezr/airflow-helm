@@ -11,7 +11,6 @@ annotated-types==0.7.0
 anyio==4.12.1
 apache-airflow==3.1.7
 apache-airflow-core==3.1.7
-apache-airflow-providers-cncf-kubernetes==10.14.0
 apache-airflow-providers-common-compat==1.14.1
 apache-airflow-providers-common-io==1.7.1
 apache-airflow-providers-common-sql==1.30.4
@@ -68,7 +67,12 @@ frozenlist==1.8.0
 fsspec==2026.1.0
 gitdb==4.0.12
 GitPython==3.1.46
+google-api-core==2.30.0
 google-auth==2.49.0
+google-cloud-core==2.5.0
+google-cloud-storage==3.9.0
+google-crc32c==1.8.0
+google-resumable-media==2.8.0
 googleapis-common-protos==1.72.0
 graphene==3.4.3
 graphql-core==3.2.8
@@ -141,6 +145,7 @@ prettytable==3.17.0
 prison==0.2.1
 prometheus_client==0.24.1
 propcache==0.4.1
+proto-plus==1.27.1
 protobuf==4.25.8
 psutil==7.2.2
 psycopg2==2.9.11

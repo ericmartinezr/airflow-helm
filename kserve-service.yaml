@@ -1,0 +1,12 @@
+apiVersion: 'serving.kserve.io/v1beta1'
+kind: 'InferenceService'
+metadata:
+  name: 'mlflow-iris-classifier'
+  namespace: 'mlflow-kserve'
+spec:
+  predictor:
+    model:
+      modelFormat:
+        name: mlflow
+      protocolVersion: v2
+      storageUri: 'gs://k8s-mlflow-mlruns'

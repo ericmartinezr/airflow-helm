@@ -522,35 +522,38 @@ def iris():
             logger.error(e, exc_info=True)
             raise AirflowFailException
 
-    @task.bash(
-        env={
-            "MLFLOW_TRACKING_URI": "{{var.value.MLFlow_Tracking_URL}}"
-        }
-    )
-    def generate_dockerfile(run_id: str):
-        try:
-            return f"mlflow models generate-dockerfile -m runs:/{run_id}/model -d ./my_output_dir"
-        except Exception as e:
-            logger.error("Error generando el archivo docker")
-            logger.error(e, exc_info=True)
-            raise AirflowFailException
-
-    deploy_model = KubernetesPodOperator(
-        task_id="deploy_model",
-        name="buildah-build",
-        image="quay.io/buildah/stable:v1.40",  # 2026 stable version
-        cmds=["buildah", "bud"],
-        arguments=[
-            "--storage-driver=vfs",
-            "-t", "my-registry.com/iris-model:latest",
-            "./my_output_dir"
-        ],
-        # Buildah needs minimal extra caps to run rootless
-        container_security_context={
-            "capabilities": {"add": ["SETGID", "SETUID"]}
-        },
-        namespace="airflow",
-    )
+    # @task.bash(
+    #    env={
+    #        "MLFLOW_TRACKING_URI": "{{var.value.MLFlow_Tracking_URL}}"
+    #    }
+    # )
+    # def generate_dockerfile(run_id: str):
+    #    try:
+    #        import mlflow
+#
+    #        mlflow.pyfunc
+    #        return f"mlflow models generate-dockerfile -m runs:/{run_id}/model -d ./my_output_dir"
+    #    except Exception as e:
+    #        logger.error("Error generando el archivo docker")
+    #        logger.error(e, exc_info=True)
+    #        raise AirflowFailException
+#
+    # deploy_model = KubernetesPodOperator(
+    #    task_id="deploy_model",
+    #    name="buildah-build",
+    #    image="quay.io/buildah/stable:v1.40",  # 2026 stable version
+    #    cmds=["buildah", "bud"],
+    #    arguments=[
+    #        "--storage-driver=vfs",
+    #        "-t", "my-registry.com/iris-model:latest",
+    #        "./my_output_dir"
+    #    ],
+    #    # Buildah needs minimal extra caps to run rootless
+    #    container_security_context={
+    #        "capabilities": {"add": ["SETGID", "SETUID"]}
+    #    },
+    #    namespace="airflow",
+    # )
 
     # @task()
     # def deploy_model(run_id: str):
@@ -581,7 +584,7 @@ def iris():
     _evaluate_model = evaluate_model(run_id=_train_model)
     _register_model = register_model(run_id=_evaluate_model)
     _test_model = test_model(run_id=_register_model)
-    _generate_dockerfile = generate_dockerfile(run_id=_test_model)
+    # _generate_dockerfile = generate_dockerfile(run_id=_test_model)
 
     (
         _validate_data >>
@@ -589,9 +592,10 @@ def iris():
         _train_model >>
         _evaluate_model >>
         _register_model >>
-        _test_model >>
-        _generate_dockerfile >>
-        deploy_model
+        _test_model
+        # >>
+        # _generate_dockerfile >>
+        # deploy_model
     )
 
 

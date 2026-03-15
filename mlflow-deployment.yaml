@@ -37,6 +37,6 @@ spec:
                 --host 0.0.0.0 \
                 --port 5000 \
                 --backend-store-uri "postgresql://${DB_USER}:${DB_PASSWORD}@database-cluster-rw.database.svc.cluster.local:5432/mlflow_db" \
-                --default-artifact-root /opt/airflow/mlruns \
+                --default-artifact-root gs://k8s-mlflow-mlruns \
                 --allowed-hosts '*' \
                 --cors-allowed-origins '*'
