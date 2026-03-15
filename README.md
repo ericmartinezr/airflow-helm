@@ -473,7 +473,7 @@ Accede a la interfaz de Grafana (ver sección 4.3.4) y realiza lo siguiente para
 Si posteriormente realizas cambios en tu archivo `airflow-values.yaml` (ej. cambiar configuraciones, habilitar nuevos servicios), aplica los cambios con el comando de actualización:
 
 ```sh
-helm upgrade airflow apache-airflow/airflow -n airflow -f airflow-values.yaml
+helm upgrade airflow apache-airflow/airflow -n airflow -f airflow-values.yaml --timeout 15m --wait
 ```
 
 ### Eliminar el Despliegue

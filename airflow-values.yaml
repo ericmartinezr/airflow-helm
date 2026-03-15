@@ -68,13 +68,13 @@ airflowHome: /opt/airflow
 defaultAirflowRepository: apache/airflow
 
 # Default airflow tag to deploy
-defaultAirflowTag: '3.1.7'
+defaultAirflowTag: '3.1.8'
 
 # Default airflow digest. If specified, it takes precedence over tag
 defaultAirflowDigest: ~
 
 # Airflow version (Used to make some decisions based on Airflow Version being deployed)
-airflowVersion: '3.1.7'
+airflowVersion: '3.1.8'
 
 # Images
 images:
@@ -391,10 +391,16 @@ env: []
 #   value: ""
 
 # Volumes for all airflow containers
-volumes: []
+volumes:
+  - name: gcp-key
+    secret:
+      secretName: gcp-mlflow-key
 
 # VolumeMounts for all airflow containers
-volumeMounts: []
+volumeMounts:
+  - name: gcp-key
+    mountPath: /var/secrets/google
+    readOnly: true
 
 # Secrets for all airflow containers
 secret: []
@@ -486,6 +492,8 @@ extraConfigMaps: {}
 extraEnv: |
   - name: AIRFLOW__CORE__TEST_CONNECTION
     value: 'Enabled'
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: /var/secrets/google/key.json
 # eg:
 # extraEnv: |
 #   - name: AIRFLOW__CORE__LOAD_EXAMPLES
