@@ -98,8 +98,18 @@ kubectl get inferenceservice mlflow-iris-classifier -oyaml -n mlflow-kserve
 
 # Pasar el key a un secret de kubernetes
 
+ ## Necesario para los servicios dentro del namespace airflow
  kubectl create secret generic gcp-mlflow-key \
  --from-file=key.json=/home/eric/.config/gcloud/k8s-mlflow-key.json -n airflow
+
+## Necesario para el servicio dentro del namespace mlflow-kserve
+ kubectl create secret generic gcp-mlflow-key \
+  --from-file=gcloud-application-credentials.json=/home/eric/.config/gcloud/k8s-mlflow-key.json \
+  -n mlflow-kserve
+
+kubectl patch serviceaccount default \
+  -n mlflow-kserve \
+  -p '{"secrets": [{"name": "gcp-mlflow-key"}]}'
 
 Mount the secret into the MLflow server pod
 
