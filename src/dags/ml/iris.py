@@ -150,6 +150,12 @@ def iris():
                     "Debes configurar la URL de tracking de MLFlow"
                 )
 
+            experiment_name = Variable.get("MLFlow_Experiment_Name", None)
+            if not mlflow_tracking_url:
+                raise ValueError(
+                    "Debes configurar el nombrel del experimento de MLFlow"
+                )
+
             mlflow.set_tracking_uri(mlflow_tracking_url)
             sklearn.autolog(
                 log_model_signatures=True, log_input_examples=True)
@@ -193,7 +199,7 @@ def iris():
             )
 
             # Configura el experimento con descripción y etiquetas via MlflowClient
-            experiment = mlflow.set_experiment("airflow-ml-iris")
+            experiment = mlflow.set_experiment(experiment_name)
             client = MlflowClient()
             client.set_experiment_tag(
                 experiment_id=experiment.experiment_id,
