@@ -194,20 +194,105 @@ kubectl create secret generic git-credentials \
   -n airflow
 ```
 
-### 3.7 Levantar servidor MLFlow
+### 3.7 Configuración de Almacenamiento en Google Cloud (GCS)
+
+Para utilizar Google Cloud Storage como Artifact Store de MLflow, es necesario crear un bucket y una cuenta de servicio (Service Account) con los permisos adecuados.
+
+**1. Configurar proyecto y autenticación**
+
+```sh
+export PROJECT_ID="k8s-mlflow"
+
+gcloud auth application-default set-quota-project $PROJECT_ID
+gcloud config set project $PROJECT_ID
+gcloud auth login
+```
+
+**2. Crear el bucket**
+
+```sh
+gcloud storage buckets create --recursive gs://k8s-mlflow-mlruns/models/iris
+```
+
+**3. Crear y configurar la Cuenta de Servicio**
+
+```sh
+# Crear cuenta de servicio
+gcloud iam service-accounts create k8s-mlflow-sa
+
+# Agregar permisos de administrador de almacenamiento para el bucket
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:k8s-mlflow-sa@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/storage.admin"
+```
+
+**4. Generar y descargar la llave JSON**
+
+Genera una clave de acceso (JSON) para la cuenta de servicio y guárdala localmente, ya que se utilizará para que los pods se autentiquen:
+1. Desde la [Consola de Google Cloud](https://console.cloud.google.com/), dirígete a **IAM y administración > Cuentas de servicio**.
+2. Selecciona `k8s-mlflow-sa`, ve a la pestaña **Claves**, haz clic en **Agregar clave > Crear clave nueva**, elige **JSON** y descárgala.
+3. Mueve y renombra el archivo descargado a la ruta local donde centralizas tus credenciales, por ejemplo, `/home/eric/.config/gcloud/k8s-mlflow-key.json`
+
+### 3.8 Gestión de Secretos en Kubernetes
+
+Tanto MLflow como Airflow necesitan acceso a credenciales para la base de datos y Google Cloud.
+
+**1. Copiar el secreto de base de datos al namespace `airflow`**
+
+La configuración de MLflow referencia las credenciales a través de un secreto. Como el cluster de PostgreSQL se encuentra en el namespace `database` y MLflow en `airflow`, debemos clonarlo:
+
+```sh
+kubectl create secret generic database-cluster-superuser \
+  --from-literal=username=$(kubectl get secret database-cluster-superuser -n database -o jsonpath='{.data.username}' | base64 -d) \
+  --from-literal=password=$(kubectl get secret database-cluster-superuser -n database -o jsonpath='{.data.password}' | base64 -d) \
+  -n airflow
+```
+
+**2. Crear el secreto de GCP para el namespace de Airflow**
+
+Esto permitirá a Airflow y MLflow autenticarse contra Google Cloud Storage:
+
+```sh
+kubectl create secret generic gcp-mlflow-key \
+  --from-file=key.json=/home/eric/.config/gcloud/k8s-mlflow-key.json -n airflow
+```
+_(Nota: Más adelante se creará otro secreto con el formato específico para KServe en su propio namespace)._
+
+### 3.9 Levantar servidor MLFlow
 
 La configuración de MLFlow se encuentra en los archivos **[MLFlow Deployment](mlflow-deployment.yaml)** y **[MLFlow Service](mlflow-service.yaml)**.
 
-El deployment referencia el secret `database-cluster-superuser` (generado automáticamente por CloudNativePG) a través de variables de entorno (`DB_USER` y `DB_PASSWORD`), por lo que la contraseña nunca queda expuesta en texto plano en los archivos del proyecto.
+El deployment referencia el secret `database-cluster-superuser` (generado automáticamente por CloudNativePG y copiado en el paso anterior) y el secreto `gcp-mlflow-key`.
 
-**1. Aplicar archivos de configuración**
+**1. Montar el secreto de GCP en MLflow**
+
+En tu archivo `mlflow-deployment.yaml`, en la especificación de contenedores (`spec.containers`), asegúrate de montar el secreto y definir la variable de entorno para GCP:
+
+```yaml
+      env:
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /var/secrets/google/key.json
+      volumeMounts:
+        - name: gcp-key
+          mountPath: /var/secrets/google
+          readOnly: true
+  volumes:
+    - name: gcp-key
+      secret:
+        secretName: gcp-mlflow-key
+```
+
+**2. Aplicar archivos de configuración**
 
 ```sh
 kubectl apply -f mlflow-deployment.yaml
 kubectl apply -f mlflow-service.yaml
+
+# Si es una actualización de secretos y MLflow ya estaba desplegado, reinícialo:
+kubectl rollout restart deployment mlflow -n airflow
 ```
 
-**2. Redireccionar el puerto a la interfaz de MLFlow**
+**3. Redireccionar el puerto a la interfaz de MLFlow**
 
 ```sh
 # Se usa el puerto 30500 ya que el puerto 5000
@@ -215,9 +300,9 @@ kubectl apply -f mlflow-service.yaml
 kubectl port-forward svc/mlflow 30500:5000 -n airflow
 ```
 
-### 3.8 Configurar `airflow-values.yaml`
+### 3.10 Configurar `airflow-values.yaml`
 
-Abre el archivo `airflow-values.yaml` descargado en el paso 3.5 y asegúrate de añadir y habilitar la sección `gitSync` para que Airflow monte el volumen correctamente y lea los DAGs. También deberás configurar la imagen oficial para utilizar nuestra imagen Docker compilada y apuntar a la rama y entorno correcto:
+Abre el archivo `airflow-values.yaml` descargado en el paso 3.5. Debes añadir la sección `gitSync`, configurar nuestra imagen Docker personalizada y montar las credenciales de Google Cloud (`gcp-mlflow-key`) para que Airflow interactúe con el almacenamiento de artefactos y no falle al subir sus propios logs/resultados.
 
 ```yaml
 # Configurar la imagen personalizada de Airflow
@@ -237,29 +322,46 @@ dags:
     subPath: 'src/dags'
     credentialsSecret: git-credentials
 
+# Configurable globalmente (si lo soporta) o por componente
+env:
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: /var/secrets/google/key.json
+
 # Logging
 logs:
   persistence:
     enabled: true
 
-# Probablemente no es requerido en todos estos, pero así me funcionó lol.
+# Configurar volúmenes para componentes (tmp y GCP key)
 workers:
   extraVolumes:
     - name: tmp-files
       persistentVolumeClaim:
         claimName: airflow-tmp-files-pvc
+    - name: gcp-key
+      secret:
+        secretName: gcp-mlflow-key
   extraVolumeMounts:
     - name: tmp-files
       mountPath: '{{ .Values.airflowHome }}/tmp'
+    - name: gcp-key
+      mountPath: '/var/secrets/google'
+      readOnly: true
 
 scheduler:
   extraVolumes:
     - name: tmp-files
       persistentVolumeClaim:
         claimName: airflow-tmp-files-pvc
+    - name: gcp-key
+      secret:
+        secretName: gcp-mlflow-key
   extraVolumeMounts:
     - name: tmp-files
       mountPath: '{{ .Values.airflowHome }}/tmp'
+    - name: gcp-key
+      mountPath: '/var/secrets/google'
+      readOnly: true
 
 apiServer:
   extraVolumes:
@@ -466,6 +568,70 @@ Accede a la interfaz de Grafana (ver sección 4.3.4) y realiza lo siguiente para
 > https://medium.com/@gayatripawar401/deploy-prometheus-and-grafana-on-kubernetes-using-helm-5aa9d4fbae66<br>
 > https://github.com/prometheus-community/helm-charts/pkgs/container/charts%2Fkube-prometheus-stack
 
+### 4.5 Despliegue de Modelos con KServe
+
+KServe es el componente responsable del despliegue en Kubernetes (model serving) de los modelos entrenados por MLflow.
+
+#### 4.5.1 Instalación de Dependencias (Cert Manager y Gateway API)
+
+KServe requiere Cert Manager para el manejo de certificados webhooks y el Gateway API como controlador de red.
+
+```sh
+# Crear namespace de destino
+kubectl create namespace mlflow-kserve
+
+# Instalar Cert Manager
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.0/cert-manager.yaml
+
+# Instalar controlador de red (Gateway API)
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+```
+
+#### 4.5.2 Instalar KServe vía Helm
+
+Una vez instaladas las dependencias, despliega KServe.
+
+```sh
+# Instalar KServe CRDs
+helm install kserve-crd oci://ghcr.io/kserve/charts/kserve-crd --version v0.17.0
+
+# Instalar recursos de KServe
+helm install kserve-resources oci://ghcr.io/kserve/charts/kserve-resources --version v0.17.0 \
+  --namespace mlflow-kserve \
+  --set kserve.controller.deploymentMode=Standard \
+  --set kserve.controller.gateway.ingressGateway.enableGatewayApi=true \
+  --set kserve.controller.gateway.ingressGateway.kserveGateway=kserve/kserve-ingress-gateway
+```
+
+#### 4.5.3 Configuración de Credenciales GCP en KServe
+
+Para que los contenedores de inferencia puedan descargar el modelo alojado en el bucket GCS:
+
+```sh
+# Crear el secreto con el formato y nombre de archivo que espera KServe
+kubectl create secret generic gcp-mlflow-key \
+  --from-file=gcloud-application-credentials.json=/home/eric/.config/gcloud/k8s-mlflow-key.json \
+  -n mlflow-kserve
+
+# Vincular el secreto a la Service Account principal en el namespace
+kubectl patch serviceaccount default \
+  -n mlflow-kserve \
+  -p '{"secrets": [{"name": "gcp-mlflow-key"}]}'
+```
+
+#### 4.5.4 Levantar el Deployment de Inferencia (Inferenceservice)
+
+Aplica tus manifiestos para levantar el API con el modelo Iris entrenado.
+
+```sh
+kubectl apply -f kserve-csr.yaml
+kubectl apply -f kserve-gateway.yaml
+kubectl apply -f kserve-service.yaml
+
+# Obtener estado del servicio (su primera inicialización puede tardar unos minutos)
+kubectl get inferenceservice mlflow-iris-classifier -oyaml -n mlflow-kserve
+```
+
 ## 5. Mantenimiento y Actualizaciones
 
 ### Actualizar el Chart
@@ -534,6 +700,10 @@ Recursos recomendados para ampliar información sobre la herramienta y el Helm C
 - [Video explicativo original - YouTube](https://www.youtube.com/watch?v=GDOw8ByzMyY)
 - https://docs.greatexpectations.io/docs/core/connect_to_data/dataframes/
 - https://grafana.com/docs/grafana/latest/setup-grafana/installation/helm/
+- https://mlflow.org/docs/latest/ml/deployment/deploy-model-to-kubernetes/tutorial/
+- https://kserve.github.io/website/docs/admin-guide/kubernetes-deployment
+- https://cert-manager.io/docs/installation/
+- https://mlflow.org/docs/latest/self-hosting/architecture/artifact-store/#google-cloud-storage
 
 ---
 

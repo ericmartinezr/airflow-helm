@@ -26,6 +26,8 @@ https://kserve.github.io/website/docs/admin-guide/kubernetes-deployment
 
 ---
 
+# Pasos a realizar en Google Cloud
+
 PROJECT_ID=k8s-mlflow
 
 gcloud auth application-default set-quota-project $PROJECT_ID
@@ -35,7 +37,7 @@ gcloud auth login
 
 # Crear bucket
 
-gcloud storage buckets create gs://k8s-mlflow-mlruns
+gcloud storage buckets create --recursive gs://k8s-mlflow-mlruns/models/iris
 
 # Crear cuenta de servicio
 
@@ -82,6 +84,10 @@ helm install kserve-resources oci://ghcr.io/kserve/charts/kserve-resources --ver
  --set kserve.controller.gateway.ingressGateway.kserveGateway=kserve/kserve-ingress-gateway
 
 
+** Referencia
+- https://mlflow.org/docs/3.2.0/ml/deployment/deploy-model-to-kubernetes/tutorial/
+- https://kserve.github.io/website/docs/admin-guide/kubernetes-deployment
+- https://kserve.github.io/website/docs/install/kserve-install
 
 ---
 
