@@ -148,3 +148,17 @@ spec:
     - name: gcp-key
       secret:
         secretName: gcp-mlflow-key
+
+---
+
+# Copiar secreto de CloudNativePg (namespace database) a airflow
+
+kubectl create secret generic database-cluster-superuser \
+  --from-literal=username=$(kubectl get secret database-cluster-superuser -n database -o jsonpath='{.data.username}' | base64 -d
+) \
+  --from-literal=password=$(kubectl get secret database-cluster-superuser -n database -o jsonpath='{.data.password}' | base64 -d
+) \
+  -n airflow
+  
+# Reiniciar deployment despues de crear el secreto
+kubectl rollout restart deployment mlflow -n airflow
