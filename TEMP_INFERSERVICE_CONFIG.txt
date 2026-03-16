@@ -83,6 +83,8 @@ helm install kserve-resources oci://ghcr.io/kserve/charts/kserve-resources --ver
 
 # Aplicar el servicio
 
+kubectl apply -f kserve-csr.yaml
+kubectl apply -f kserve-service-install.yaml
 kubectl apply -f kserve-service.yaml
 
 ---
@@ -91,12 +93,6 @@ kubectl apply -f kserve-service.yaml
 
 kubectl get inferenceservice mlflow-iris-classifier -n mlflow-kserve
 kubectl get inferenceservice mlflow-iris-classifier -oyaml -n mlflow-kserve
-
----
-
-# Configurar GCP en servidor y cliente
-
-https://www.youtube.com/watch?v=MWfKAgEHsHo
 
 ---
 

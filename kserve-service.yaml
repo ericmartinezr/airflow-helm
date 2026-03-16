@@ -9,4 +9,12 @@ spec:
       modelFormat:
         name: mlflow
       protocolVersion: v2
-      storageUri: 'gs://k8s-mlflow-mlruns'
+      runtime: kserve-mlserver
+      storageUri: 'gs://k8s-mlflow-mlruns/artifacts/iris'
+      resources:
+        requests:
+          cpu: '100m'
+          memory: '512Mi'
+        limits:
+          cpu: '1'
+          memory: '1Gi'

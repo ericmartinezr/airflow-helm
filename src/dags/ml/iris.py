@@ -151,7 +151,7 @@ def iris():
                 )
 
             experiment_name = Variable.get("MLFlow_Experiment_Name", None)
-            if not mlflow_tracking_url:
+            if not experiment_name:
                 raise ValueError(
                     "Debes configurar el nombrel del experimento de MLFlow"
                 )
@@ -199,7 +199,7 @@ def iris():
             )
 
             # Configura el experimento con descripción y etiquetas via MlflowClient
-            experiment = mlflow.set_experiment(experiment_name)
+            experiment = mlflow.set_experiment(f"{experiment_name}/iris")
             client = MlflowClient()
             client.set_experiment_tag(
                 experiment_id=experiment.experiment_id,

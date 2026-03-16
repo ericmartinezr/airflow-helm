@@ -9,7 +9,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: kserve-ingress-gateway
-  namespace: kserve
+  namespace: mlflow-kserve
 spec:
   gatewayClassName: envoy
   listeners:
@@ -27,7 +27,7 @@ spec:
         certificateRefs:
           - kind: Secret
             name: my-secret
-            namespace: kserve
+            namespace: mlflow-kserve
       allowedRoutes:
         namespaces:
           from: All
