@@ -4,8 +4,7 @@ from datetime import timedelta
 from airflow.sdk import dag, task, Variable
 from airflow.exceptions import AirflowSkipException, AirflowFailException
 from airflow.providers.standard.hooks.filesystem import FSHook
-from airflow.providers.standard.operators.python import get_current_context
-from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
+from airflow.sdk import get_current_context
 
 
 logger = logging.getLogger(__name__)

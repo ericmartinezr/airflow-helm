@@ -13,11 +13,19 @@ spec:
       labels:
         app: mlflow
     spec:
+      volumes:
+        - name: gcp-key
+          secret:
+            secretName: gcp-mlflow-key
       containers:
         - name: mlflow
           image: ghcr.io/mlflow/mlflow:v3.10.1-full
           ports:
             - containerPort: 5000
+          volumeMounts:
+            - name: gcp-key
+              mountPath: /var/secrets/google
+              readOnly: true
           env:
             - name: DB_USER
               valueFrom:
@@ -29,6 +37,8 @@ spec:
                 secretKeyRef:
                   name: database-cluster-superuser
                   key: password
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/secrets/google/key.json
           command:
             - /bin/bash
             - -c
