@@ -211,7 +211,24 @@ gcloud auth login
 **2. Crear el bucket**
 
 ```sh
-gcloud storage buckets create --recursive gs://k8s-mlflow-mlruns/models/iris
+REGION=us-central1
+
+# Para contener el resultado de las ejecuciones
+# Crear directorios .../models/iris
+gcloud storage buckets create gs://k8s-mlflow-mlruns \
+  --default-storage-class=STANDARD \
+  --location=$REGION \
+  --uniform-bucket-level-access \
+  --public-access-prevention
+
+# Ruta para servir el resultado productivo
+# Crear directorio .../iris
+gcloud storage buckets create gs://mlflow-serving \
+  --default-storage-class=STANDARD \
+  --location=$REGION \
+  --uniform-bucket-level-access \
+  --public-access-prevention
+
 ```
 
 **3. Crear y configurar la Cuenta de Servicio**
@@ -229,6 +246,7 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 **4. Generar y descargar la llave JSON**
 
 Genera una clave de acceso (JSON) para la cuenta de servicio y guárdala localmente, ya que se utilizará para que los pods se autentiquen:
+
 1. Desde la [Consola de Google Cloud](https://console.cloud.google.com/), dirígete a **IAM y administración > Cuentas de servicio**.
 2. Selecciona `k8s-mlflow-sa`, ve a la pestaña **Claves**, haz clic en **Agregar clave > Crear clave nueva**, elige **JSON** y descárgala.
 3. Mueve y renombra el archivo descargado a la ruta local donde centralizas tus credenciales, por ejemplo, `/home/eric/.config/gcloud/k8s-mlflow-key.json`
@@ -256,6 +274,7 @@ Esto permitirá a Airflow y MLflow autenticarse contra Google Cloud Storage:
 kubectl create secret generic gcp-mlflow-key \
   --from-file=key.json=/home/eric/.config/gcloud/k8s-mlflow-key.json -n airflow
 ```
+
 _(Nota: Más adelante se creará otro secreto con el formato específico para KServe en su propio namespace)._
 
 ### 3.9 Levantar servidor MLFlow
