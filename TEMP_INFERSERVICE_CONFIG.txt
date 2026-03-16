@@ -81,20 +81,10 @@ helm install kserve-resources oci://ghcr.io/kserve/charts/kserve-resources --ver
  --set kserve.controller.gateway.ingressGateway.enableGatewayApi=true \
  --set kserve.controller.gateway.ingressGateway.kserveGateway=kserve/kserve-ingress-gateway
 
-# Aplicar el servicio
 
-kubectl apply -f kserve-csr.yaml
-kubectl apply -f kserve-service-install.yaml
-kubectl apply -f kserve-service.yaml
 
 ---
 
-# Obtener estado del servicio
-
-kubectl get inferenceservice mlflow-iris-classifier -n mlflow-kserve
-kubectl get inferenceservice mlflow-iris-classifier -oyaml -n mlflow-kserve
-
----
 
 # Pasar el key a un secret de kubernetes
 
@@ -107,9 +97,26 @@ kubectl get inferenceservice mlflow-iris-classifier -oyaml -n mlflow-kserve
   --from-file=gcloud-application-credentials.json=/home/eric/.config/gcloud/k8s-mlflow-key.json \
   -n mlflow-kserve
 
+## Aplicar cuenta de servicio a KServe
 kubectl patch serviceaccount default \
   -n mlflow-kserve \
   -p '{"secrets": [{"name": "gcp-mlflow-key"}]}'
+
+
+---
+
+# Aplicar el servicio con todos los cambios necesarios
+
+kubectl apply -f kserve-csr.yaml
+kubectl apply -f kserve-gateway.yaml
+kubectl apply -f kserve-service.yaml
+
+# Obtener estado del servicio
+## Esto suele tardar unos minutos
+
+kubectl get inferenceservice mlflow-iris-classifier -oyaml -n mlflow-kserve
+
+---
 
 Mount the secret into the MLflow server pod
 

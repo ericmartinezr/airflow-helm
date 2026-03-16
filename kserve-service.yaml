@@ -10,7 +10,7 @@ spec:
         name: mlflow
       protocolVersion: v2
       runtime: kserve-mlserver
-      storageUri: 'gs://k8s-mlflow-mlruns/artifacts/iris'
+      storageUri: 'gs://k8s-mlflow-mlruns/models/iris'
       resources:
         requests:
           cpu: '100m'
