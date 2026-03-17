@@ -136,6 +136,7 @@ RUN pip install scikit-learn==1.8.0
 RUN pip install pandas==3.0.1
 RUN pip install mlflow==3.10.1
 RUN pip install great_expectations==1.14.0
+RUN pip install google-cloud-storage
 ```
 
 **2. Construcción de la imagen**
@@ -193,20 +194,124 @@ kubectl create secret generic git-credentials \
   -n airflow
 ```
 
-### 3.7 Levantar servidor MLFlow
+### 3.7 Configuración de Almacenamiento en Google Cloud (GCS)
+
+Para utilizar Google Cloud Storage como Artifact Store de MLflow, es necesario crear un bucket y una cuenta de servicio (Service Account) con los permisos adecuados.
+
+**1. Configurar proyecto y autenticación**
+
+```sh
+export PROJECT_ID="k8s-mlflow"
+
+gcloud auth application-default set-quota-project $PROJECT_ID
+gcloud config set project $PROJECT_ID
+gcloud auth login
+```
+
+**2. Crear el bucket**
+
+```sh
+REGION=us-central1
+
+# Para contener el resultado de las ejecuciones
+# Crear directorios .../models/iris
+gcloud storage buckets create gs://k8s-mlflow-mlruns \
+  --default-storage-class=STANDARD \
+  --location=$REGION \
+  --uniform-bucket-level-access \
+  --public-access-prevention
+
+# Ruta para servir el resultado productivo
+# Crear directorio .../iris
+gcloud storage buckets create gs://mlflow-serving \
+  --default-storage-class=STANDARD \
+  --location=$REGION \
+  --uniform-bucket-level-access \
+  --public-access-prevention
+
+```
+
+**3. Crear y configurar la Cuenta de Servicio**
+
+```sh
+# Crear cuenta de servicio
+gcloud iam service-accounts create k8s-mlflow-sa
+
+# Agregar permisos de administrador de almacenamiento para el bucket
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:k8s-mlflow-sa@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/storage.admin"
+```
+
+**4. Generar y descargar la llave JSON**
+
+Genera una clave de acceso (JSON) para la cuenta de servicio y guárdala localmente, ya que se utilizará para que los pods se autentiquen:
+
+1. Desde la [Consola de Google Cloud](https://console.cloud.google.com/), dirígete a **IAM y administración > Cuentas de servicio**.
+2. Selecciona `k8s-mlflow-sa`, ve a la pestaña **Claves**, haz clic en **Agregar clave > Crear clave nueva**, elige **JSON** y descárgala.
+3. Mueve y renombra el archivo descargado a la ruta local donde centralizas tus credenciales, por ejemplo, `/home/eric/.config/gcloud/k8s-mlflow-key.json`
+
+### 3.8 Gestión de Secretos en Kubernetes
+
+Tanto MLflow como Airflow necesitan acceso a credenciales para la base de datos y Google Cloud.
+
+**1. Copiar el secreto de base de datos al namespace `airflow`**
+
+La configuración de MLflow referencia las credenciales a través de un secreto. Como el cluster de PostgreSQL se encuentra en el namespace `database` y MLflow en `airflow`, debemos clonarlo:
+
+```sh
+kubectl create secret generic database-cluster-superuser \
+  --from-literal=username=$(kubectl get secret database-cluster-superuser -n database -o jsonpath='{.data.username}' | base64 -d) \
+  --from-literal=password=$(kubectl get secret database-cluster-superuser -n database -o jsonpath='{.data.password}' | base64 -d) \
+  -n airflow
+```
+
+**2. Crear el secreto de GCP para el namespace de Airflow**
+
+Esto permitirá a Airflow y MLflow autenticarse contra Google Cloud Storage:
+
+```sh
+kubectl create secret generic gcp-mlflow-key \
+  --from-file=key.json=/home/eric/.config/gcloud/k8s-mlflow-key.json -n airflow
+```
+
+_(Nota: Más adelante se creará otro secreto con el formato específico para KServe en su propio namespace)._
+
+### 3.9 Levantar servidor MLFlow
 
 La configuración de MLFlow se encuentra en los archivos **[MLFlow Deployment](mlflow-deployment.yaml)** y **[MLFlow Service](mlflow-service.yaml)**.
 
-El deployment referencia el secret `database-cluster-superuser` (generado automáticamente por CloudNativePG) a través de variables de entorno (`DB_USER` y `DB_PASSWORD`), por lo que la contraseña nunca queda expuesta en texto plano en los archivos del proyecto.
+El deployment referencia el secret `database-cluster-superuser` (generado automáticamente por CloudNativePG y copiado en el paso anterior) y el secreto `gcp-mlflow-key`.
 
-**1. Aplicar archivos de configuración**
+**1. Montar el secreto de GCP en MLflow**
+
+En tu archivo `mlflow-deployment.yaml`, en la especificación de contenedores (`spec.containers`), asegúrate de montar el secreto y definir la variable de entorno para GCP:
+
+```yaml
+      env:
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /var/secrets/google/key.json
+      volumeMounts:
+        - name: gcp-key
+          mountPath: /var/secrets/google
+          readOnly: true
+  volumes:
+    - name: gcp-key
+      secret:
+        secretName: gcp-mlflow-key
+```
+
+**2. Aplicar archivos de configuración**
 
 ```sh
 kubectl apply -f mlflow-deployment.yaml
 kubectl apply -f mlflow-service.yaml
+
+# Si es una actualización de secretos y MLflow ya estaba desplegado, reinícialo:
+kubectl rollout restart deployment mlflow -n airflow
 ```
 
-**2. Redireccionar el puerto a la interfaz de MLFlow**
+**3. Redireccionar el puerto a la interfaz de MLFlow**
 
 ```sh
 # Se usa el puerto 30500 ya que el puerto 5000
@@ -214,9 +319,9 @@ kubectl apply -f mlflow-service.yaml
 kubectl port-forward svc/mlflow 30500:5000 -n airflow
 ```
 
-### 3.8 Configurar `airflow-values.yaml`
+### 3.10 Configurar `airflow-values.yaml`
 
-Abre el archivo `airflow-values.yaml` descargado en el paso 3.5 y asegúrate de añadir y habilitar la sección `gitSync` para que Airflow monte el volumen correctamente y lea los DAGs. También deberás configurar la imagen oficial para utilizar nuestra imagen Docker compilada y apuntar a la rama y entorno correcto:
+Abre el archivo `airflow-values.yaml` descargado en el paso 3.5. Debes añadir la sección `gitSync`, configurar nuestra imagen Docker personalizada y montar las credenciales de Google Cloud (`gcp-mlflow-key`) para que Airflow interactúe con el almacenamiento de artefactos y no falle al subir sus propios logs/resultados.
 
 ```yaml
 # Configurar la imagen personalizada de Airflow
@@ -236,29 +341,46 @@ dags:
     subPath: 'src/dags'
     credentialsSecret: git-credentials
 
+# Configurable globalmente (si lo soporta) o por componente
+env:
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: /var/secrets/google/key.json
+
 # Logging
 logs:
   persistence:
     enabled: true
 
-# Probablemente no es requerido en todos estos, pero así me funcionó lol.
+# Configurar volúmenes para componentes (tmp y GCP key)
 workers:
   extraVolumes:
     - name: tmp-files
       persistentVolumeClaim:
         claimName: airflow-tmp-files-pvc
+    - name: gcp-key
+      secret:
+        secretName: gcp-mlflow-key
   extraVolumeMounts:
     - name: tmp-files
       mountPath: '{{ .Values.airflowHome }}/tmp'
+    - name: gcp-key
+      mountPath: '/var/secrets/google'
+      readOnly: true
 
 scheduler:
   extraVolumes:
     - name: tmp-files
       persistentVolumeClaim:
         claimName: airflow-tmp-files-pvc
+    - name: gcp-key
+      secret:
+        secretName: gcp-mlflow-key
   extraVolumeMounts:
     - name: tmp-files
       mountPath: '{{ .Values.airflowHome }}/tmp'
+    - name: gcp-key
+      mountPath: '/var/secrets/google'
+      readOnly: true
 
 apiServer:
   extraVolumes:
@@ -465,6 +587,167 @@ Accede a la interfaz de Grafana (ver sección 4.3.4) y realiza lo siguiente para
 > https://medium.com/@gayatripawar401/deploy-prometheus-and-grafana-on-kubernetes-using-helm-5aa9d4fbae66<br>
 > https://github.com/prometheus-community/helm-charts/pkgs/container/charts%2Fkube-prometheus-stack
 
+### 4.5 Despliegue de Modelos con KServe
+
+KServe es el componente responsable del despliegue en Kubernetes (model serving) de los modelos entrenados por MLflow.
+
+#### 4.5.1 Instalación de Dependencias (Cert Manager e Istio)
+
+KServe requiere Cert Manager para el manejo de certificados webhooks, e Istio como controlador de red (Ingress Gateway) para exponer los servicios de inferencia.
+
+```sh
+# Crear namespace de destino
+kubectl create namespace mlflow-kserve
+
+# Instalar Cert Manager
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.0/cert-manager.yaml
+
+# Agregar chart de Istio al repositorio
+helm repo add istio https://istio-release.storage.googleapis.com/charts
+helm repo update
+
+# Instalar Istio
+helm install istio-base istio/base -n istio-system --set defaultRevision=default --create-namespace
+helm install istiod istio/istiod -n istio-system --wait
+
+# Instalar ingress gateway de Istio.
+# La etiqueta `istio=ingressgateway` es OBLIGATORIA: el controlador de Istio la usa
+# para identificar qué proxies Envoy deben procesar las rutas de objetos Ingress.
+kubectl create namespace istio-ingress
+helm install istio-ingress istio/gateway -n istio-ingress --set labels.istio=ingressgateway --wait
+```
+
+**Validar instalación de Istio**
+
+```sh
+helm ls -n istio-system
+kubectl get deployments -n istio-system --output wide
+```
+
+**Registrar Istio como IngressClass**
+
+KServe en modo Estándar crea objetos `Ingress` de Kubernetes con la clase `istio`. Es necesario registrar dicha clase en el clúster para que el controlador de Istio los detecte y programe las rutas en Envoy:
+
+```sh
+# El archivo kserve-ingress.yaml define el IngressClass de tipo `istio.io/ingress-controller`
+kubectl apply -f kserve-ingress.yaml
+```
+
+#### 4.5.2 Instalar KServe vía Helm
+
+Una vez instaladas las dependencias, despliega KServe en **modo Estándar**, configurado explícitamente para usar Istio (y no el Gateway API de Kubernetes):
+
+```sh
+# Instalar KServe CRDs
+helm install kserve-crd oci://ghcr.io/kserve/charts/kserve-crd --version v0.17.0
+
+# Instalar recursos de KServe
+helm install kserve-resources oci://ghcr.io/kserve/charts/kserve-resources --version v0.17.0 \
+  --namespace mlflow-kserve \
+  --set kserve.controller.deploymentMode=Standard \
+  --set kserve.controller.gateway.ingressGateway.enableGatewayApi=false \
+  --set kserve.controller.gateway.ingressGateway.kserveGateway=mlflow-kserve/kserve-ingress-gateway
+```
+
+> **Importante:** El flag `enableGatewayApi=false` es necesario para que KServe genere objetos `Ingress` estándar (en lugar de `HTTPRoute`), que son los que Istio traduce automáticamente en reglas de Envoy.
+
+#### 4.5.3 Configuración de Credenciales GCP en KServe
+
+Para que los contenedores de inferencia puedan descargar el modelo alojado en el bucket GCS:
+
+```sh
+# Crear el secreto con el formato y nombre de archivo que espera KServe
+kubectl create secret generic gcp-mlflow-key \
+  --from-file=gcloud-application-credentials.json=/home/eric/.config/gcloud/k8s-mlflow-key.json \
+  -n mlflow-kserve
+
+# Vincular el secreto a la Service Account principal en el namespace
+kubectl patch serviceaccount default \
+  -n mlflow-kserve \
+  -p '{"secrets": [{"name": "gcp-mlflow-key"}]}'
+```
+
+#### 4.5.4 Levantar el Deployment de Inferencia (InferenceService)
+
+Aplica los manifiestos para configurar el Gateway de Istio y el servicio de inferencia:
+
+```sh
+# Gateway de Istio para KServe.
+# Define un recurso `networking.istio.io/v1beta1 Gateway` que selecciona el proxy
+# Envoy del namespace `istio-ingress` para enrutar el tráfico entrante al modelo.
+kubectl apply -f kserve-gateway.yaml
+
+# InferenceService del modelo Iris
+kubectl apply -f kserve-service.yaml
+
+# Verificar estado (puede tardar unos minutos en la primera inicialización)
+kubectl get inferenceservice mlflow-iris-classifier -n mlflow-kserve
+```
+
+El servicio estará listo cuando la columna `READY` muestre `True`.
+
+#### 4.5.5 Probar la Inferencia
+
+Con el servicio activo, envía una petición HTTP al Ingress Gateway de Istio para obtener una predicción del modelo.
+
+**1. Preparar los datos de entrada (`test-input.json`)**
+
+El modelo fue entrenado con un DataFrame de Pandas, por lo que cada campo de entrada debe coincidir exactamente con el nombre de columna registrado en MLflow (incluyendo variables derivadas como `sepal_ratio`). El archivo [test-input.json](test-input.json) ya contiene la estructura correcta:
+
+```json
+{
+  "inputs": [
+    {"name": "sepal length (cm)", "shape": [1], "datatype": "FP64", "data": [5.1]},
+    {"name": "sepal width (cm)",  "shape": [1], "datatype": "FP64", "data": [3.5]},
+    {"name": "petal length (cm)", "shape": [1], "datatype": "FP64", "data": [1.4]},
+    {"name": "petal width (cm)",  "shape": [1], "datatype": "FP64", "data": [0.2]},
+    {"name": "sepal_ratio",       "shape": [1], "datatype": "FP64", "data": [1.4571]}
+  ]
+}
+```
+
+> **Nota:** `sepal_ratio` es la variable derivada `sepal_length / sepal_width` calculada e incluida como feature durante el entrenamiento del modelo en el DAG de MLflow.
+
+**2. Redirigir el puerto del Istio Ingress Gateway**
+
+```sh
+INGRESS_GATEWAY_SERVICE=$(kubectl get svc -n istio-ingress --selector="app=istio-ingress" -o jsonpath='{.items[0].metadata.name}')
+kubectl port-forward -n istio-ingress svc/${INGRESS_GATEWAY_SERVICE} 8888:80 &
+```
+
+**3. Ejecutar la inferencia**
+
+```sh
+# Obtener el hostname asignado por KServe al servicio
+SERVICE_HOSTNAME=$(kubectl get inferenceservice mlflow-iris-classifier -n mlflow-kserve -o jsonpath='{.status.url}' | cut -d "/" -f 3)
+
+# Enviar la petición al endpoint V2 de inferencia
+curl -H "Host: ${SERVICE_HOSTNAME}" \
+     -H "Content-Type: application/json" \
+     http://localhost:8888/v2/models/mlflow-iris-classifier/infer \
+     -d @./test-input.json
+```
+
+Una respuesta exitosa incluirá la clase predicha por el modelo (por ejemplo, `0` = Iris setosa):
+
+```json
+{
+    "model_name": "mlflow-iris-classifier",
+    "outputs": [{
+            "name": "output-1",
+            "shape": [1, 1],
+            "datatype": "INT64",
+            "data": [0]
+        }
+    ]
+}
+
+```
+
+> **Referencias:**
+> - https://istio.io/latest/docs/setup/install/helm/
+> - https://kserve.github.io/website/docs/admin-guide/kubernetes-deployment
+
 ## 5. Mantenimiento y Actualizaciones
 
 ### Actualizar el Chart
@@ -472,7 +755,7 @@ Accede a la interfaz de Grafana (ver sección 4.3.4) y realiza lo siguiente para
 Si posteriormente realizas cambios en tu archivo `airflow-values.yaml` (ej. cambiar configuraciones, habilitar nuevos servicios), aplica los cambios con el comando de actualización:
 
 ```sh
-helm upgrade airflow apache-airflow/airflow -n airflow -f airflow-values.yaml
+helm upgrade airflow apache-airflow/airflow -n airflow -f airflow-values.yaml --timeout 15m --wait
 ```
 
 ### Eliminar el Despliegue
@@ -533,6 +816,11 @@ Recursos recomendados para ampliar información sobre la herramienta y el Helm C
 - [Video explicativo original - YouTube](https://www.youtube.com/watch?v=GDOw8ByzMyY)
 - https://docs.greatexpectations.io/docs/core/connect_to_data/dataframes/
 - https://grafana.com/docs/grafana/latest/setup-grafana/installation/helm/
+- https://mlflow.org/docs/latest/ml/deployment/deploy-model-to-kubernetes/tutorial/
+- https://kserve.github.io/website/docs/admin-guide/kubernetes-deployment
+- https://cert-manager.io/docs/installation/
+- https://mlflow.org/docs/latest/self-hosting/architecture/artifact-store/#google-cloud-storage
+- https://istio.io/latest/docs/setup/install/helm/
 
 ---
 
@@ -543,12 +831,12 @@ Lista consolidada de todos los comandos necesarios para redirigir los puertos y 
 ```sh
 # Apache Airflow (UI / API Server)
 # Acceso: http://localhost:8080
-kubectl port-forward svc/airflow-api-server 8080:8080 --namespace airflow
+kubectl port-forward svc/airflow-api-server 8080:8080 --namespace airflow &
 
 # MLflow (Tracking Server)
 # Acceso: http://localhost:30500
 # Nota: se usa el puerto 30500 porque el 5000 puede estar ocupado en Windows
-kubectl port-forward svc/mlflow 30500:5000 -n airflow
+kubectl port-forward svc/mlflow 30500:5000 -n airflow &
 
 # Grafana (Dashboard de Métricas)
 # Acceso: http://localhost:3100
@@ -557,7 +845,21 @@ export POD_NAME=$(kubectl get pods \
   --namespace grafana-ns \
   -l "app.kubernetes.io/name=grafana,app.kubernetes.io/instance=grafana" \
   -o jsonpath="{.items[0].metadata.name}")
-kubectl --namespace grafana-ns port-forward $POD_NAME 3100:3000
+kubectl --namespace grafana-ns port-forward $POD_NAME 3100:3000 &
+
+# KServe / Istio Ingress Gateway (Inferencia de Modelos)
+# Puerto local 8888 → puerto 80 del servicio istio-ingress
+INGRESS_GATEWAY_SERVICE=$(kubectl get svc -n istio-ingress --selector="app=istio-ingress" -o jsonpath='{.items[0].metadata.name}')
+kubectl port-forward -n istio-ingress svc/${INGRESS_GATEWAY_SERVICE} 8888:80 &
+```
+
+Comandos para detener los procesos
+
+```sh
+kill -9 $(lsof -t -i:8080)
+kill -9 $(lsof -t -i:30500)
+kill -9 $(lsof -t -i:3100)
+kill -9 $(lsof -t -i:8888)
 ```
 
 ---

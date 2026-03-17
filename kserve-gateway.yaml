@@ -1,0 +1,16 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: kserve-ingress-gateway
+  namespace: mlflow-kserve
+spec:
+  selector:
+    # Este label debe coincidir con el instalado por helm `istio-ingress`
+    app: istio-ingress
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "*"

@@ -1,0 +1,34 @@
+{
+  "inputs": [
+    {
+      "name": "sepal length (cm)",
+      "shape": [1],
+      "datatype": "FP64",
+      "data": [5.1]
+    },
+    {
+      "name": "sepal width (cm)",
+      "shape": [1],
+      "datatype": "FP64",
+      "data": [3.5]
+    },
+    {
+      "name": "petal length (cm)",
+      "shape": [1],
+      "datatype": "FP64",
+      "data": [1.4]
+    },
+    {
+      "name": "petal width (cm)",
+      "shape": [1],
+      "datatype": "FP64",
+      "data": [0.2]
+    },
+    {
+      "name": "sepal_ratio",
+      "shape": [1],
+      "datatype": "FP64",
+      "data": [1.4571]
+    }
+  ]
+}

@@ -2,9 +2,11 @@ import logging
 import pendulum
 from datetime import timedelta
 from airflow.sdk import dag, task, Variable
-from airflow.exceptions import AirflowSkipException
+from airflow.exceptions import AirflowSkipException, AirflowFailException
 from airflow.providers.standard.hooks.filesystem import FSHook
-from airflow.providers.standard.operators.python import get_current_context
+from airflow.providers.google.cloud.transfers.gcs_to_gcs import GCSToGCSOperator
+from airflow.sdk import get_current_context
+
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +52,7 @@ def configure_expectations():
 )
 def iris():
 
-    @task()
+    @task(max_active_tis_per_dag=1)
     def extract_data():
         """
         Extrae datos con los que se entrenará al modelo
@@ -97,7 +99,7 @@ def iris():
 
         return expectation.get("success")
 
-    @task()
+    @task(max_active_tis_per_dag=1)
     def feature_engineering():
         """
         Ingeniería de características
@@ -124,23 +126,25 @@ def iris():
             raise AirflowSkipException
 
     @task(max_active_tis_per_dag=1)
-    def train_model():
+    def train_register_model():
         """
-        Entrenamiento del modelo con MLFlow.
+        Entrena el modelo, lo registra en MLFlow y en el Model Registry.
 
-        Guarda los splits de entrenamiento y prueba como artefactos Parquet
-        en MLFlow (bajo splits/) para que las tareas posteriores los lean
-        directamente sin volver a calcular el split.
-        Usa log_input únicamente para trazabilidad (lineage) en la UI de MLFlow.
+        - Realiza el split train/test una única vez.
+        - Loggea el modelo con firma inferida y lo registra con nombre en el Model Registry.
+        - Asigna descripción y etiquetas al modelo registrado y a la versión.
         """
-        import tempfile
-        import os
         import pandas as pd
         import mlflow
         from mlflow import sklearn
+        from mlflow.models import infer_signature
         from mlflow.tracking import MlflowClient
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.model_selection import train_test_split
+
+        NOMBRE_MODELO = "iris-random-forest-clasif-model"
+        TEST_SIZE = 0.25
+        RANDOM_STATE = 42
 
         try:
             mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
@@ -149,9 +153,14 @@ def iris():
                     "Debes configurar la URL de tracking de MLFlow"
                 )
 
+            experiment_name = Variable.get("MLFlow_Experiment_Iris", None)
+            if not experiment_name:
+                raise ValueError(
+                    "Debes configurar el nombre del experimento de MLFlow"
+                )
+
             mlflow.set_tracking_uri(mlflow_tracking_url)
-            sklearn.autolog(
-                log_model_signatures=True, log_input_examples=True)
+            sklearn.autolog(log_model_signatures=True, log_input_examples=True)
 
             context = get_current_context()
             ds = context["logical_date"].format("YYYYMMDD")
@@ -163,116 +172,104 @@ def iris():
 
             X = df.drop("target", axis=1)
             y = df["target"]
-
-            # El split ocurre UNA sola vez aquí.
-            # Los artefactos resultantes son consumidos por evaluate_model
-            # y register_model via mlflow.artifacts.download_artifacts().
-            TEST_SIZE = 0.25
-            RANDOM_STATE = 42
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE
             )
 
-            # Datasets para trazabilidad (lineage) en la UI de MLFlow.
-            # log_input solo guarda metadatos (esquema, digest, fuente);
-            # NO almacena los datos reales del split.
-            train_data = pd.concat([X_train, y_train], axis=1)
-            test_data = pd.concat([X_test, y_test], axis=1)
-            train_dataset = mlflow.data.from_pandas(
-                train_data,
-                source=features_file_name,
-                name="iris-entrenamiento",
-                targets="target"
-            )
-            test_dataset = mlflow.data.from_pandas(
-                test_data,
-                source=features_file_name,
-                name="iris-prueba",
-                targets="target"
-            )
-
-            # Configura el experimento con descripción y etiquetas via MlflowClient
-            experiment = mlflow.set_experiment("airflow-ml-iris")
+            experiment = mlflow.set_experiment(experiment_name)
             client = MlflowClient()
-            client.set_experiment_tag(
-                experiment_id=experiment.experiment_id,
-                key="descripcion",
-                value="Experimento de clasificación de flores Iris usando RandomForestClassifier. "
-                      "Pipeline orquestado con Apache Airflow."
-            )
 
             with mlflow.start_run(
                 experiment_id=experiment.experiment_id,
                 run_name=f"iris-RandomForestClassifier-{ds}",
                 description=(
-                    "Entrenamiento de RandomForestClassifier sobre el dataset Iris. "
-                    "Incluye ingeniería de características (sepal_ratio). "
-                    f"Fecha lógica del pipeline: {ds}. "
-                    f"Run de Airflow: {dag_run_id}."
+                    f"Entrenamiento de RandomForestClassifier sobre el dataset Iris. "
+                    f"Fecha lógica: {ds}. Run de Airflow: {dag_run_id}."
                 )
             ) as active_run:
-                logger.info(f"Run activo: {active_run.info.run_id}")
+                run_id = active_run.info.run_id
+                logger.info(f"Run activo: {run_id}")
 
-                # Hiperparámetros del modelo y del pipeline de datos
                 model = RandomForestClassifier(random_state=RANDOM_STATE)
-                mlflow.log_params({
-                    "algoritmo": "RandomForestClassifier",
-                    "n_estimators": model.n_estimators,
-                    "max_depth": str(model.max_depth),
-                    "random_state": RANDOM_STATE,
-                    "test_size": TEST_SIZE,
-                    "train_size": 1 - TEST_SIZE,
-                    "fuente_datos": features_file_name,
-                })
-
                 model.fit(X_train, y_train)
-                sklearn.log_model(model, name="model")
 
-                # Lineage: registra qué datos se usaron para entrenar y testear
-                mlflow.log_input(train_dataset, context="entrenamiento",
-                                 tags={"descripcion": "Set de entrenamiento (75%)",
-                                       "formato": "parquet",
-                                       "n_muestras": str(len(X_train))})
-                mlflow.log_input(test_dataset, context="prueba",
-                                 tags={"descripcion": "Set de prueba (25%)",
-                                       "formato": "parquet",
-                                       "n_muestras": str(len(X_test))})
+                y_pred = model.predict(X_test)
+                signature = infer_signature(X_test, y_pred)
 
-                # Almacena los splits reales como artefactos Parquet en MLFlow.
-                # Las tareas evaluate_model y register_model los descargarán
-                # con mlflow.artifacts.download_artifacts() sin re-calcular nada.
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    splits = {
-                        "X_train": X_train,
-                        "X_test": X_test,
-                        "y_train": y_train.to_frame(),
-                        "y_test": y_test.to_frame(),
-                    }
-                    for name, data in splits.items():
-                        local_path = os.path.join(tmp_dir, f"{name}.parquet")
-                        data.to_parquet(local_path, index=True)
-                        mlflow.log_artifact(local_path, artifact_path="splits")
-                        logger.info(
-                            f"Split '{name}' guardado como artefacto MLFlow")
+                model_info = sklearn.log_model(
+                    sk_model=model,
+                    name="iris-model",
+                    signature=signature,
+                    input_example=X_test.iloc[:5],
+                    registered_model_name=NOMBRE_MODELO,
+                )
 
-                # Solo retornamos el run_id (string) para que XCom pueda serializarlo
-                return active_run.info.run_id
+                version = model_info.registered_model_version
+
+                # Descripción y etiquetas del modelo registrado
+                client.update_registered_model(
+                    name=NOMBRE_MODELO,
+                    description=(
+                        "Modelo de clasificación multiclase para el dataset Iris. "
+                        "Clasifica flores en tres especies: setosa, versicolor y virginica. "
+                        "Entrenado con RandomForestClassifier de scikit-learn. "
+                        "Pipeline orquestado con Apache Airflow."
+                    )
+                )
+                for clave, valor in {
+                    "algoritmo": "RandomForestClassifier",
+                    "dataset": "iris",
+                    "pipeline": "airflow-ml-iris",
+                }.items():
+                    client.set_registered_model_tag(
+                        NOMBRE_MODELO, clave, valor)
+
+                # Descripción y etiquetas de esta versión
+                client.update_model_version(
+                    name=NOMBRE_MODELO,
+                    version=version,
+                    description=(
+                        f"Versión entrenada en el run MLFlow: {run_id}. "
+                        "Evaluada y aprobada con exactitud ≥ 0.8 sobre el set de prueba."
+                    )
+                )
+                client.set_model_version_tag(
+                    NOMBRE_MODELO, version, "run_id", run_id)
+                client.set_tag(
+                    run_id, "modelo.version_registrada", str(version))
+                client.set_tag(
+                    run_id, "modelo.nombre_registrado", NOMBRE_MODELO)
+
+                logger.info(
+                    f"Modelo '{NOMBRE_MODELO}' v{version} registrado "
+                    f"exitosamente (run_id={run_id})"
+                )
+
+                logger.info(
+                    f"Id del modelo registrado '{model_info.model_id}'"
+                )
+
+                return {
+                    "run_id": run_id,
+                    "model_id": model_info.model_id
+                }
 
         except Exception as e:
-            logger.error("Error entrenando el modelo")
+            logger.error("Error en train_register_model")
             logger.error(e, exc_info=True)
             raise AirflowSkipException
 
-    @task()
-    def evaluate_model(run_id: str):
+    @task(max_active_tis_per_dag=1)
+    def evaluate_model(run_data: dict):
         """
         Evalúa el modelo.
 
-        Descarga los splits de prueba desde los artefactos MLFlow generados
-        por train_model. No vuelve a leer el CSV ni a recalcular el split.
+        Recalcula el split de prueba leyendo el CSV de features (mismo
+        RANDOM_STATE y TEST_SIZE que train_register_model) para obtener
+        X_test e y_test de forma determinista sin artefactos intermedios.
         Registra métricas completas de evaluación:
           - Exactitud global
-          - Precisión, recall y F1 por clase (macro y ponderado)
+          - Precisión, recall y F1 por clase
           - Matriz de confusión como artefacto JSON
         """
         import json
@@ -280,9 +277,9 @@ def iris():
         import os
         import pandas as pd
         import mlflow
-        import mlflow.artifacts
         from mlflow import sklearn
         from mlflow.tracking import MlflowClient
+        from sklearn.model_selection import train_test_split
         from sklearn.metrics import (
             accuracy_score,
             precision_score,
@@ -292,7 +289,13 @@ def iris():
             confusion_matrix,
         )
 
+        TEST_SIZE = 0.25
+        RANDOM_STATE = 42
+
         try:
+            context = get_current_context()
+            run_id = run_data["run_id"]
+
             mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
             if not mlflow_tracking_url:
                 raise ValueError(
@@ -301,15 +304,16 @@ def iris():
 
             mlflow.set_tracking_uri(mlflow_tracking_url)
 
-            # Descarga X_test e y_test desde los artefactos del run de entrenamiento
-            X_test_path = mlflow.artifacts.download_artifacts(
-                run_id=run_id, artifact_path="splits/X_test.parquet"
+            # Recalcula el split con la misma semilla que train_register_model
+            features_file_name = context["ti"].xcom_pull(
+                task_ids="feature_engineering"
             )
-            y_test_path = mlflow.artifacts.download_artifacts(
-                run_id=run_id, artifact_path="splits/y_test.parquet"
+            df = pd.read_csv(features_file_name)
+            X = df.drop("target", axis=1)
+            y = df["target"]
+            _, X_test, _, y_test = train_test_split(
+                X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE
             )
-            X_test = pd.read_parquet(X_test_path)
-            y_test = pd.read_parquet(y_test_path).squeeze()
 
             model = sklearn.load_model(f"runs:/{run_id}/model")
             y_pred = model.predict(X_test)
@@ -320,10 +324,6 @@ def iris():
             precision_macro = precision_score(y_test, y_pred, average="macro")
             recall_macro = recall_score(y_test, y_pred, average="macro")
             f1_macro = f1_score(y_test, y_pred, average="macro")
-            precision_pond = precision_score(
-                y_test, y_pred, average="weighted")
-            recall_pond = recall_score(y_test, y_pred, average="weighted")
-            f1_pond = f1_score(y_test, y_pred, average="weighted")
             matriz = confusion_matrix(y_test, y_pred).tolist()
             reporte = classification_report(
                 y_test, y_pred,
@@ -383,33 +383,22 @@ def iris():
                 client.log_artifact(run_id, matriz_path,
                                     artifact_path="evaluacion")
 
-            return run_id
+            return run_data
 
         except Exception as e:
             logger.error("Error evaluando el modelo")
             logger.error(e, exc_info=True)
             raise AirflowSkipException
 
-    @task()
-    def register_model(run_id: str):
-        """
-        Registra el modelo en MLFlow.
-
-        Descarga X_test desde los artefactos MLFlow generados por train_model
-        para inferir la firma del modelo. No vuelve a leer el CSV ni a
-        recalcular el split.
-        Asigna descripción y etiquetas al modelo registrado y a la versión.
-        """
-        import pandas as pd
-        import mlflow
-        import mlflow.artifacts
-        from mlflow import sklearn
-        from mlflow.models import infer_signature
-        from mlflow.tracking import MlflowClient
-
-        NOMBRE_MODELO = "iris-random-forest-clasif-model"
-
+    @task(max_active_tis_per_dag=1)
+    def test_model(run_data: dict):
         try:
+            import mlflow
+            import pandas as pd
+            from mlflow import sklearn
+
+            run_id = run_data["run_id"]
+
             mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
             if not mlflow_tracking_url:
                 raise ValueError(
@@ -417,81 +406,54 @@ def iris():
                 )
 
             mlflow.set_tracking_uri(mlflow_tracking_url)
-
-            # Descarga X_test desde los artefactos del run de entrenamiento
-            X_test_path = mlflow.artifacts.download_artifacts(
-                run_id=run_id, artifact_path="splits/X_test.parquet"
-            )
-            X_test = pd.read_parquet(X_test_path)
-
             model = sklearn.load_model(f"runs:/{run_id}/model")
-            y_pred = model.predict(X_test)
-            signature = infer_signature(X_test, y_pred)
-
-            model_info = sklearn.log_model(
-                sk_model=model,
-                name="iris-model",
-                signature=signature,
-                input_example=X_test.iloc[:5],
-                registered_model_name=NOMBRE_MODELO,
+            df = pd.DataFrame(
+                [
+                    [5.1, 3.5, 1.4, 0.2, 0.8],
+                    [6.2, 3.4, 5.4, 2.3, 1.0],
+                    [5.9, 3.0, 4.2, 1.5, 0.2]
+                ],
+                columns=[
+                    "sepal length (cm)",
+                    "sepal width (cm)",
+                    "petal length (cm)",
+                    "petal width (cm)",
+                    "sepal_ratio"
+                ]
             )
+            pred = model.predict(df)
+            print(pred)
 
-            client = MlflowClient()
-
-            # Descripción y etiquetas del modelo registrado (aplica a todas las versiones)
-            client.update_registered_model(
-                name=NOMBRE_MODELO,
-                description=(
-                    "Modelo de clasificación multiclase para el dataset Iris. "
-                    "Clasifica flores en tres especies: setosa, versicolor y virginica. "
-                    "Entrenado con RandomForestClassifier de scikit-learn. "
-                    "Pipeline orquestado con Apache Airflow."
-                )
-            )
-            for clave, valor in {
-                "algoritmo": "RandomForestClassifier",
-                "dataset": "iris",
-                "pipeline": "airflow-ml-iris",
-            }.items():
-                client.set_registered_model_tag(NOMBRE_MODELO, clave, valor)
-
-            # Descripción y etiquetas de esta versión específica
-            version = model_info.registered_model_version
-            client.update_model_version(
-                name=NOMBRE_MODELO,
-                version=version,
-                description=(
-                    f"Versión entrenada en el run MLFlow: {run_id}. "
-                    "Evaluada y aprobada con exactitud ≥ 0.8 sobre el set de prueba. "
-                    "Splits reproducibles almacenados como artefactos Parquet."
-                )
-            )
-            client.set_model_version_tag(
-                NOMBRE_MODELO, version, "run_id", run_id)
-
-            # Marca el run como completado
-            client.set_tag(run_id, "etapa", "registro")
-            client.set_tag(run_id, "modelo.version_registrada", str(version))
-            client.set_tag(run_id, "modelo.nombre_registrado", NOMBRE_MODELO)
-
-            logger.info(
-                f"Modelo '{NOMBRE_MODELO}' v{version} registrado "
-                f"exitosamente (run_id={run_id})"
-            )
-
+            return run_data
         except Exception as e:
-            logger.error("Error registrando el modelo")
+            logger.error("Error probando el modelo")
             logger.error(e, exc_info=True)
-            raise AirflowSkipException
+            raise AirflowFailException
+
+    copy_model = GCSToGCSOperator(
+        task_id="copy_model",
+        source_bucket="k8s-mlflow-mlruns",
+        source_object="models/iris/models/{{ ti.xcom_pull(task_ids='test_model')['model_id'] }}/artifacts/*",
+        destination_bucket="mlflow-serving",
+        destination_object="iris/latest/",
+        move_object=False,
+    )
 
     _extract_data = extract_data()
     _validate_data = validate_data(file_name=_extract_data)
     _feature_engineering = feature_engineering()
-    _train_model = train_model()
-    _evaluate_model = evaluate_model(run_id=_train_model)
-    _register_model = register_model(run_id=_evaluate_model)
+    _train_register_model = train_register_model()
+    _evaluate_model = evaluate_model(run_data=_train_register_model)
+    _test_model = test_model(run_data=_evaluate_model)
 
-    _validate_data >> _feature_engineering >> _train_model >> _evaluate_model >> _register_model
+    (
+        _validate_data >>
+        _feature_engineering >>
+        _train_register_model >>
+        _evaluate_model >>
+        _test_model >>
+        copy_model
+    )
 
 
 iris()

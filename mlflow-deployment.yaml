@@ -13,11 +13,19 @@ spec:
       labels:
         app: mlflow
     spec:
+      volumes:
+        - name: gcp-key
+          secret:
+            secretName: gcp-mlflow-key
       containers:
         - name: mlflow
           image: ghcr.io/mlflow/mlflow:v3.10.1-full
           ports:
             - containerPort: 5000
+          volumeMounts:
+            - name: gcp-key
+              mountPath: /var/secrets/google
+              readOnly: true
           env:
             - name: DB_USER
               valueFrom:
@@ -29,6 +37,8 @@ spec:
                 secretKeyRef:
                   name: database-cluster-superuser
                   key: password
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/secrets/google/key.json
           command:
             - /bin/bash
             - -c
@@ -37,6 +47,6 @@ spec:
                 --host 0.0.0.0 \
                 --port 5000 \
                 --backend-store-uri "postgresql://${DB_USER}:${DB_PASSWORD}@database-cluster-rw.database.svc.cluster.local:5432/mlflow_db" \
-                --default-artifact-root /opt/airflow/mlruns \
+                --default-artifact-root gs://mlflow-serving/iris/latest \
                 --allowed-hosts '*' \
                 --cors-allowed-origins '*'
