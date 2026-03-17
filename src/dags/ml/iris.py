@@ -4,6 +4,7 @@ from datetime import timedelta
 from airflow.sdk import dag, task, Variable
 from airflow.exceptions import AirflowSkipException, AirflowFailException
 from airflow.providers.standard.hooks.filesystem import FSHook
+from airflow.providers.google.cloud.transfers.gcs_to_gcs import GCSToGCSOperator
 from airflow.sdk import get_current_context
 
 
@@ -51,7 +52,7 @@ def configure_expectations():
 )
 def iris():
 
-    @task()
+    @task(max_active_tis_per_dag=1)
     def extract_data():
         """
         Extrae datos con los que se entrenará al modelo
@@ -98,7 +99,7 @@ def iris():
 
         return expectation.get("success")
 
-    @task()
+    @task(max_active_tis_per_dag=1)
     def feature_engineering():
         """
         Ingeniería de características
@@ -270,7 +271,7 @@ def iris():
             logger.error(e, exc_info=True)
             raise AirflowSkipException
 
-    @task()
+    @task(max_active_tis_per_dag=1)
     def evaluate_model(run_id: str):
         """
         Evalúa el modelo.
@@ -393,7 +394,7 @@ def iris():
             logger.error(e, exc_info=True)
             raise AirflowSkipException
 
-    @task()
+    @task(max_active_tis_per_dag=1)
     def register_model(run_id: str):
         """
         Registra el modelo en MLFlow.
@@ -489,7 +490,7 @@ def iris():
             logger.error(e, exc_info=True)
             raise AirflowSkipException
 
-    @task()
+    @task(max_active_tis_per_dag=1)
     def test_model(run_id: str):
         try:
             import mlflow
@@ -526,6 +527,15 @@ def iris():
             logger.error("Error probando el modelo")
             logger.error(e, exc_info=True)
             raise AirflowFailException
+
+    copy_model = GCSToGCSOperator(
+        task_id="copy_model",
+        source_bucket="k8s-mlflow-mlruns",
+        source_object="models/iris/{{ ti.xcom_pull(task_ids='test_model') }}/models/model/*",
+        destination_bucket="model-serving",
+        destination_object="iris/latest/",
+        move_object=False,
+    )
 
     # @task.bash(
     #    env={
