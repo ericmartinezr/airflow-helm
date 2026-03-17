@@ -426,7 +426,7 @@ def iris():
         task_id="copy_model",
         source_bucket="k8s-mlflow-mlruns",
         source_object="models/iris/{{ ti.xcom_pull(task_ids='test_model') }}/models/model/*",
-        destination_bucket="model-serving",
+        destination_bucket="mlflow-serving",
         destination_object="iris/latest/",
         move_object=False,
     )
@@ -437,7 +437,6 @@ def iris():
     _train_register_model = train_register_model()
     _evaluate_model = evaluate_model(run_id=_train_register_model)
     _test_model = test_model(run_id=_evaluate_model)
-    # _generate_dockerfile = generate_dockerfile(run_id=_test_model)
 
     (
         _validate_data >>
@@ -446,9 +445,6 @@ def iris():
         _evaluate_model >>
         _test_model >>
         copy_model
-        # >>
-        # _generate_dockerfile >>
-        # deploy_model
     )
 
 
