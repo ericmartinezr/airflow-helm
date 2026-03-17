@@ -131,12 +131,17 @@ Dado que este proyecto requiere librerías específicas (como `pandas`, `scikit-
 El proyecto incluye un archivo `Dockerfile` en el directorio raíz en el que se especifican las dependencias adicionales a instalar sobre la versión base de Airflow:
 
 ```dockerfile
-FROM apache/airflow:3.1.7
-RUN pip install scikit-learn==1.8.0
-RUN pip install pandas==3.0.1
-RUN pip install mlflow==3.10.1
-RUN pip install great_expectations==1.14.0
-RUN pip install google-cloud-storage
+FROM apache/airflow:3.1.8
+
+RUN pip install --no-cache-dir \
+    "apache-airflow[google]==3.1.8" \
+    --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.1.8/constraints-3.12.txt"
+
+RUN pip install  --no-cache-dir \
+    scikit-learn==1.8.0 \
+    "mlflow[mlserver]==3.10.1" \
+    great_expectations==1.14.0 \
+    google-cloud-storage==3.9.0
 ```
 
 **2. Construcción de la imagen**
@@ -323,15 +328,14 @@ kubectl port-forward svc/mlflow 30500:5000 -n airflow
 
 Una vez que el servidor de MLflow esté accesible, accede a la interfaz `http://localhost:30500` y crea el experimento que usarán los DAGs de Airflow.
 
-| Campo | Valor |
-|---|---|
-| **Experiment name** | `airflow-mlflow-iris-gcp` |
+| Campo                 | Valor                                |
+| --------------------- | ------------------------------------ |
+| **Experiment name**   | `airflow-mlflow-iris-gcp`            |
 | **Artifact location** | `gs://k8s-mlflow-mlruns/models/iris` |
 
 > **Nota:** El nombre del experimento debe coincidir exactamente con el valor de la variable `MLFlow_Experiment_Iris` que se configurará en Airflow (ver sección 4.2.1). La Artifact location debe apuntar al bucket GCS donde se guardarán los artefactos del entrenamiento.
 
 ### 3.10 Configurar `airflow-values.yaml`
-
 
 Abre el archivo `airflow-values.yaml` descargado en el paso 3.5. Debes añadir la sección `gitSync`, configurar nuestra imagen Docker personalizada y montar las credenciales de Google Cloud (`gcp-mlflow-key`) para que Airflow interactúe con el almacenamiento de artefactos y no falle al subir sus propios logs/resultados.
 
@@ -446,23 +450,23 @@ Una vez que Airflow esté corriendo y accesible en `http://localhost:8080`, es n
 
 **Variables**
 
-| Variable | Valor | Descripción |
-|---|---|---|
+| Variable                 | Valor                     | Descripción                                                                       |
+| ------------------------ | ------------------------- | --------------------------------------------------------------------------------- |
 | `MLFlow_Experiment_Iris` | `airflow-mlflow-iris-gcp` | Nombre del experimento en MLflow (debe coincidir con el creado en la sección 3.9) |
-| `MLFlow_Tracking_URL` | `http://mlflow:5000` | URL interna del servidor de tracking de MLflow dentro del clúster |
+| `MLFlow_Tracking_URL`    | `http://mlflow:5000`      | URL interna del servidor de tracking de MLflow dentro del clúster                 |
 
 **Conexiones**
 
-| Conexión | Connection Type | Extra / Configuración |
-|---|---|---|
-| `google_cloud_default` | Google Cloud | **Keyfile JSON:** contenido del archivo JSON de la cuenta de servicio GCP |
-| `temp_files` | File (path) | **Path:** `/opt/airflow/tmp` (debe coincidir con el `mountPath` definido en `airflow-values.yaml`) |
+| Conexión               | Connection Type | Extra / Configuración                                                                              |
+| ---------------------- | --------------- | -------------------------------------------------------------------------------------------------- |
+| `google_cloud_default` | Google Cloud    | **Keyfile JSON:** contenido del archivo JSON de la cuenta de servicio GCP                          |
+| `temp_files`           | File (path)     | **Path:** `/opt/airflow/tmp` (debe coincidir con el `mountPath` definido en `airflow-values.yaml`) |
 
 **Pools**
 
-| Pool | Slots | Descripción |
-|---|---|---|
-| `ml_pool` | `1` | Pool dedicado para las tareas de ML, permite controlar la concurrencia |
+| Pool      | Slots | Descripción                                                            |
+| --------- | ----- | ---------------------------------------------------------------------- |
+| `ml_pool` | `1`   | Pool dedicado para las tareas de ML, permite controlar la concurrencia |
 
 ### 4.3 Instalar el Chart de Grafana
 
@@ -733,11 +737,36 @@ El modelo fue entrenado con un DataFrame de Pandas, por lo que cada campo de ent
 ```json
 {
   "inputs": [
-    {"name": "sepal length (cm)", "shape": [1], "datatype": "FP64", "data": [5.1]},
-    {"name": "sepal width (cm)",  "shape": [1], "datatype": "FP64", "data": [3.5]},
-    {"name": "petal length (cm)", "shape": [1], "datatype": "FP64", "data": [1.4]},
-    {"name": "petal width (cm)",  "shape": [1], "datatype": "FP64", "data": [0.2]},
-    {"name": "sepal_ratio",       "shape": [1], "datatype": "FP64", "data": [1.4571]}
+    {
+      "name": "sepal length (cm)",
+      "shape": [1],
+      "datatype": "FP64",
+      "data": [5.1]
+    },
+    {
+      "name": "sepal width (cm)",
+      "shape": [1],
+      "datatype": "FP64",
+      "data": [3.5]
+    },
+    {
+      "name": "petal length (cm)",
+      "shape": [1],
+      "datatype": "FP64",
+      "data": [1.4]
+    },
+    {
+      "name": "petal width (cm)",
+      "shape": [1],
+      "datatype": "FP64",
+      "data": [0.2]
+    },
+    {
+      "name": "sepal_ratio",
+      "shape": [1],
+      "datatype": "FP64",
+      "data": [1.4571]
+    }
   ]
 }
 ```
@@ -768,19 +797,20 @@ Una respuesta exitosa incluirá la clase predicha por el modelo (por ejemplo, `0
 
 ```json
 {
-    "model_name": "mlflow-iris-classifier",
-    "outputs": [{
-            "name": "output-1",
-            "shape": [1, 1],
-            "datatype": "INT64",
-            "data": [0]
-        }
-    ]
+  "model_name": "mlflow-iris-classifier",
+  "outputs": [
+    {
+      "name": "output-1",
+      "shape": [1, 1],
+      "datatype": "INT64",
+      "data": [0]
+    }
+  ]
 }
-
 ```
 
 > **Referencias:**
+>
 > - https://istio.io/latest/docs/setup/install/helm/
 > - https://kserve.github.io/website/docs/admin-guide/kubernetes-deployment
 

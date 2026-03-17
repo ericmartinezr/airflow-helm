@@ -6,7 +6,6 @@ RUN pip install --no-cache-dir \
 
 RUN pip install  --no-cache-dir \
     scikit-learn==1.8.0 \
-    #pandas==3.0.1 \
     "mlflow[mlserver]==3.10.1" \
     great_expectations==1.14.0 \
     google-cloud-storage==3.9.0
