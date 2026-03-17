@@ -249,7 +249,10 @@ def iris():
                     f"Id del modelo registrado '{model_info.model_id}'"
                 )
 
-                return run_id
+                return {
+                    "run_id": run_id,
+                    "model_id": model_info.model_id
+                }
 
         except Exception as e:
             logger.error("Error en train_register_model")
@@ -257,7 +260,7 @@ def iris():
             raise AirflowSkipException
 
     @task(max_active_tis_per_dag=1)
-    def evaluate_model(run_id: str):
+    def evaluate_model(run_data: dict):
         """
         Evalúa el modelo.
 
@@ -290,6 +293,9 @@ def iris():
         RANDOM_STATE = 42
 
         try:
+            context = get_current_context()
+            run_id = run_data["run_id"]
+
             mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
             if not mlflow_tracking_url:
                 raise ValueError(
@@ -299,7 +305,7 @@ def iris():
             mlflow.set_tracking_uri(mlflow_tracking_url)
 
             # Recalcula el split con la misma semilla que train_register_model
-            features_file_name = get_current_context()["ti"].xcom_pull(
+            features_file_name = context["ti"].xcom_pull(
                 task_ids="feature_engineering"
             )
             df = pd.read_csv(features_file_name)
@@ -377,7 +383,7 @@ def iris():
                 client.log_artifact(run_id, matriz_path,
                                     artifact_path="evaluacion")
 
-            return run_id
+            return run_data
 
         except Exception as e:
             logger.error("Error evaluando el modelo")
@@ -385,11 +391,13 @@ def iris():
             raise AirflowSkipException
 
     @task(max_active_tis_per_dag=1)
-    def test_model(run_id: str):
+    def test_model(run_data: dict):
         try:
             import mlflow
             import pandas as pd
             from mlflow import sklearn
+
+            run_id = run_data["run_id"]
 
             mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
             if not mlflow_tracking_url:
@@ -416,7 +424,7 @@ def iris():
             pred = model.predict(df)
             print(pred)
 
-            return run_id
+            return run_data
         except Exception as e:
             logger.error("Error probando el modelo")
             logger.error(e, exc_info=True)
@@ -425,7 +433,7 @@ def iris():
     copy_model = GCSToGCSOperator(
         task_id="copy_model",
         source_bucket="k8s-mlflow-mlruns",
-        source_object="models/iris/{{ ti.xcom_pull(task_ids='test_model') }}/models/model/*",
+        source_object="models/iris/models/{{ ti.xcom_pull(task_ids='test_model')['model_id'] }}/artifacts/*",
         destination_bucket="mlflow-serving",
         destination_object="iris/latest/",
         move_object=False,
