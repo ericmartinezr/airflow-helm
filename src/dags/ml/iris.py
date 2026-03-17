@@ -443,8 +443,8 @@ def iris():
     _validate_data = validate_data(file_name=_extract_data)
     _feature_engineering = feature_engineering()
     _train_register_model = train_register_model()
-    _evaluate_model = evaluate_model(run_id=_train_register_model)
-    _test_model = test_model(run_id=_evaluate_model)
+    _evaluate_model = evaluate_model(run_data=_train_register_model)
+    _test_model = test_model(run_data=_evaluate_model)
 
     (
         _validate_data >>
