@@ -245,6 +245,10 @@ def iris():
                     f"exitosamente (run_id={run_id})"
                 )
 
+                logger.info(
+                    f"Id del modelo registrado '{model_info.model_id}'"
+                )
+
                 return run_id
 
         except Exception as e:
