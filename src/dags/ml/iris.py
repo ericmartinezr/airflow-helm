@@ -537,61 +537,6 @@ def iris():
         move_object=False,
     )
 
-    # @task.bash(
-    #    env={
-    #        "MLFLOW_TRACKING_URI": "{{var.value.MLFlow_Tracking_URL}}"
-    #    }
-    # )
-    # def generate_dockerfile(run_id: str):
-    #    try:
-    #        import mlflow
-#
-    #        mlflow.pyfunc
-    #        return f"mlflow models generate-dockerfile -m runs:/{run_id}/model -d ./my_output_dir"
-    #    except Exception as e:
-    #        logger.error("Error generando el archivo docker")
-    #        logger.error(e, exc_info=True)
-    #        raise AirflowFailException
-#
-    # deploy_model = KubernetesPodOperator(
-    #    task_id="deploy_model",
-    #    name="buildah-build",
-    #    image="quay.io/buildah/stable:v1.40",  # 2026 stable version
-    #    cmds=["buildah", "bud"],
-    #    arguments=[
-    #        "--storage-driver=vfs",
-    #        "-t", "my-registry.com/iris-model:latest",
-    #        "./my_output_dir"
-    #    ],
-    #    # Buildah needs minimal extra caps to run rootless
-    #    container_security_context={
-    #        "capabilities": {"add": ["SETGID", "SETUID"]}
-    #    },
-    #    namespace="airflow",
-    # )
-
-    # @task()
-    # def deploy_model(run_id: str):
-    #    try:
-    #        import mlflow
-#
-    #        mlflow_tracking_url = Variable.get("MLFlow_Tracking_URL", None)
-    #        if not mlflow_tracking_url:
-    #            raise ValueError(
-    #                "Debes configurar la URL de tracking de MLFlow"
-    #            )
-#
-    #        mlflow.set_tracking_uri(mlflow_tracking_url)
-    #        mlflow.models.build_docker(
-    #            model_uri=f"runs:/{run_id}/model",
-    #            name="iris-model-img",
-    #            enable_mlserver=True
-    #        )
-    #    except Exception as e:
-    #        logger.error("Error desplegando el modelo")
-    #        logger.error(e, exc_info=True)
-    #        raise AirflowSkipException
-
     _extract_data = extract_data()
     _validate_data = validate_data(file_name=_extract_data)
     _feature_engineering = feature_engineering()
@@ -607,7 +552,8 @@ def iris():
         _train_model >>
         _evaluate_model >>
         _register_model >>
-        _test_model
+        _test_model >>
+        copy_model
         # >>
         # _generate_dockerfile >>
         # deploy_model
