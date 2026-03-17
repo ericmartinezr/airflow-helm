@@ -319,7 +319,19 @@ kubectl rollout restart deployment mlflow -n airflow
 kubectl port-forward svc/mlflow 30500:5000 -n airflow
 ```
 
+**4. Crear el Experimento en MLFlow**
+
+Una vez que el servidor de MLflow esté accesible, accede a la interfaz `http://localhost:30500` y crea el experimento que usarán los DAGs de Airflow.
+
+| Campo | Valor |
+|---|---|
+| **Experiment name** | `airflow-mlflow-iris-gcp` |
+| **Artifact location** | `gs://k8s-mlflow-mlruns/models/iris` |
+
+> **Nota:** El nombre del experimento debe coincidir exactamente con el valor de la variable `MLFlow_Experiment_Iris` que se configurará en Airflow (ver sección 4.2.1). La Artifact location debe apuntar al bucket GCS donde se guardarán los artefactos del entrenamiento.
+
 ### 3.10 Configurar `airflow-values.yaml`
+
 
 Abre el archivo `airflow-values.yaml` descargado en el paso 3.5. Debes añadir la sección `gitSync`, configurar nuestra imagen Docker personalizada y montar las credenciales de Google Cloud (`gcp-mlflow-key`) para que Airflow interactúe con el almacenamiento de artefactos y no falle al subir sus propios logs/resultados.
 
@@ -427,6 +439,30 @@ También puedes comprobar el estado general del chart instalado en Helm:
 ```sh
 helm list -n airflow
 ```
+
+### 4.2.1 Configurar Variables, Conexiones y Pools de Airflow
+
+Una vez que Airflow esté corriendo y accesible en `http://localhost:8080`, es necesario crear manualmente los siguientes objetos de configuración desde la interfaz web (Admin > Variables / Connections / Pools) antes de ejecutar los DAGs.
+
+**Variables**
+
+| Variable | Valor | Descripción |
+|---|---|---|
+| `MLFlow_Experiment_Iris` | `airflow-mlflow-iris-gcp` | Nombre del experimento en MLflow (debe coincidir con el creado en la sección 3.9) |
+| `MLFlow_Tracking_URL` | `http://mlflow:5000` | URL interna del servidor de tracking de MLflow dentro del clúster |
+
+**Conexiones**
+
+| Conexión | Connection Type | Extra / Configuración |
+|---|---|---|
+| `google_cloud_default` | Google Cloud | **Keyfile JSON:** contenido del archivo JSON de la cuenta de servicio GCP |
+| `temp_files` | File (path) | **Path:** `/opt/airflow/tmp` (debe coincidir con el `mountPath` definido en `airflow-values.yaml`) |
+
+**Pools**
+
+| Pool | Slots | Descripción |
+|---|---|---|
+| `ml_pool` | `1` | Pool dedicado para las tareas de ML, permite controlar la concurrencia |
 
 ### 4.3 Instalar el Chart de Grafana
 
