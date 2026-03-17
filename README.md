@@ -591,9 +591,9 @@ Accede a la interfaz de Grafana (ver sección 4.3.4) y realiza lo siguiente para
 
 KServe es el componente responsable del despliegue en Kubernetes (model serving) de los modelos entrenados por MLflow.
 
-#### 4.5.1 Instalación de Dependencias (Cert Manager y Gateway API)
+#### 4.5.1 Instalación de Dependencias (Cert Manager e Istio)
 
-KServe requiere Cert Manager para el manejo de certificados webhooks y el Gateway API como controlador de red.
+KServe requiere Cert Manager para el manejo de certificados webhooks, e Istio como controlador de red (Ingress Gateway) para exponer los servicios de inferencia.
 
 ```sh
 # Crear namespace de destino
@@ -602,13 +602,40 @@ kubectl create namespace mlflow-kserve
 # Instalar Cert Manager
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.0/cert-manager.yaml
 
-# Instalar controlador de red (Gateway API)
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+# Agregar chart de Istio al repositorio
+helm repo add istio https://istio-release.storage.googleapis.com/charts
+helm repo update
+
+# Instalar Istio
+helm install istio-base istio/base -n istio-system --set defaultRevision=default --create-namespace
+helm install istiod istio/istiod -n istio-system --wait
+
+# Instalar ingress gateway de Istio.
+# La etiqueta `istio=ingressgateway` es OBLIGATORIA: el controlador de Istio la usa
+# para identificar qué proxies Envoy deben procesar las rutas de objetos Ingress.
+kubectl create namespace istio-ingress
+helm install istio-ingress istio/gateway -n istio-ingress --set labels.istio=ingressgateway --wait
+```
+
+**Validar instalación de Istio**
+
+```sh
+helm ls -n istio-system
+kubectl get deployments -n istio-system --output wide
+```
+
+**Registrar Istio como IngressClass**
+
+KServe en modo Estándar crea objetos `Ingress` de Kubernetes con la clase `istio`. Es necesario registrar dicha clase en el clúster para que el controlador de Istio los detecte y programe las rutas en Envoy:
+
+```sh
+# El archivo kserve-ingress.yaml define el IngressClass de tipo `istio.io/ingress-controller`
+kubectl apply -f kserve-ingress.yaml
 ```
 
 #### 4.5.2 Instalar KServe vía Helm
 
-Una vez instaladas las dependencias, despliega KServe.
+Una vez instaladas las dependencias, despliega KServe en **modo Estándar**, configurado explícitamente para usar Istio (y no el Gateway API de Kubernetes):
 
 ```sh
 # Instalar KServe CRDs
@@ -618,9 +645,11 @@ helm install kserve-crd oci://ghcr.io/kserve/charts/kserve-crd --version v0.17.0
 helm install kserve-resources oci://ghcr.io/kserve/charts/kserve-resources --version v0.17.0 \
   --namespace mlflow-kserve \
   --set kserve.controller.deploymentMode=Standard \
-  --set kserve.controller.gateway.ingressGateway.enableGatewayApi=true \
-  --set kserve.controller.gateway.ingressGateway.kserveGateway=kserve/kserve-ingress-gateway
+  --set kserve.controller.gateway.ingressGateway.enableGatewayApi=false \
+  --set kserve.controller.gateway.ingressGateway.kserveGateway=mlflow-kserve/kserve-ingress-gateway
 ```
+
+> **Importante:** El flag `enableGatewayApi=false` es necesario para que KServe genere objetos `Ingress` estándar (en lugar de `HTTPRoute`), que son los que Istio traduce automáticamente en reglas de Envoy.
 
 #### 4.5.3 Configuración de Credenciales GCP en KServe
 
@@ -638,18 +667,86 @@ kubectl patch serviceaccount default \
   -p '{"secrets": [{"name": "gcp-mlflow-key"}]}'
 ```
 
-#### 4.5.4 Levantar el Deployment de Inferencia (Inferenceservice)
+#### 4.5.4 Levantar el Deployment de Inferencia (InferenceService)
 
-Aplica tus manifiestos para levantar el API con el modelo Iris entrenado.
+Aplica los manifiestos para configurar el Gateway de Istio y el servicio de inferencia:
 
 ```sh
-kubectl apply -f kserve-csr.yaml
+# Gateway de Istio para KServe.
+# Define un recurso `networking.istio.io/v1beta1 Gateway` que selecciona el proxy
+# Envoy del namespace `istio-ingress` para enrutar el tráfico entrante al modelo.
 kubectl apply -f kserve-gateway.yaml
+
+# InferenceService del modelo Iris
 kubectl apply -f kserve-service.yaml
 
-# Obtener estado del servicio (su primera inicialización puede tardar unos minutos)
-kubectl get inferenceservice mlflow-iris-classifier -oyaml -n mlflow-kserve
+# Verificar estado (puede tardar unos minutos en la primera inicialización)
+kubectl get inferenceservice mlflow-iris-classifier -n mlflow-kserve
 ```
+
+El servicio estará listo cuando la columna `READY` muestre `True`.
+
+#### 4.5.5 Probar la Inferencia
+
+Con el servicio activo, envía una petición HTTP al Ingress Gateway de Istio para obtener una predicción del modelo.
+
+**1. Preparar los datos de entrada (`test-input.json`)**
+
+El modelo fue entrenado con un DataFrame de Pandas, por lo que cada campo de entrada debe coincidir exactamente con el nombre de columna registrado en MLflow (incluyendo variables derivadas como `sepal_ratio`). El archivo [test-input.json](test-input.json) ya contiene la estructura correcta:
+
+```json
+{
+  "inputs": [
+    {"name": "sepal length (cm)", "shape": [1], "datatype": "FP64", "data": [5.1]},
+    {"name": "sepal width (cm)",  "shape": [1], "datatype": "FP64", "data": [3.5]},
+    {"name": "petal length (cm)", "shape": [1], "datatype": "FP64", "data": [1.4]},
+    {"name": "petal width (cm)",  "shape": [1], "datatype": "FP64", "data": [0.2]},
+    {"name": "sepal_ratio",       "shape": [1], "datatype": "FP64", "data": [1.4571]}
+  ]
+}
+```
+
+> **Nota:** `sepal_ratio` es la variable derivada `sepal_length / sepal_width` calculada e incluida como feature durante el entrenamiento del modelo en el DAG de MLflow.
+
+**2. Redirigir el puerto del Istio Ingress Gateway**
+
+```sh
+INGRESS_GATEWAY_SERVICE=$(kubectl get svc -n istio-ingress --selector="app=istio-ingress" -o jsonpath='{.items[0].metadata.name}')
+kubectl port-forward -n istio-ingress svc/${INGRESS_GATEWAY_SERVICE} 8888:80 &
+```
+
+**3. Ejecutar la inferencia**
+
+```sh
+# Obtener el hostname asignado por KServe al servicio
+SERVICE_HOSTNAME=$(kubectl get inferenceservice mlflow-iris-classifier -n mlflow-kserve -o jsonpath='{.status.url}' | cut -d "/" -f 3)
+
+# Enviar la petición al endpoint V2 de inferencia
+curl -H "Host: ${SERVICE_HOSTNAME}" \
+     -H "Content-Type: application/json" \
+     http://localhost:8888/v2/models/mlflow-iris-classifier/infer \
+     -d @./test-input.json
+```
+
+Una respuesta exitosa incluirá la clase predicha por el modelo (por ejemplo, `0` = Iris setosa):
+
+```json
+{
+    "model_name": "mlflow-iris-classifier",
+    "outputs": [{
+            "name": "output-1",
+            "shape": [1, 1],
+            "datatype": "INT64",
+            "data": [0]
+        }
+    ]
+}
+
+```
+
+> **Referencias:**
+> - https://istio.io/latest/docs/setup/install/helm/
+> - https://kserve.github.io/website/docs/admin-guide/kubernetes-deployment
 
 ## 5. Mantenimiento y Actualizaciones
 
@@ -723,6 +820,7 @@ Recursos recomendados para ampliar información sobre la herramienta y el Helm C
 - https://kserve.github.io/website/docs/admin-guide/kubernetes-deployment
 - https://cert-manager.io/docs/installation/
 - https://mlflow.org/docs/latest/self-hosting/architecture/artifact-store/#google-cloud-storage
+- https://istio.io/latest/docs/setup/install/helm/
 
 ---
 
@@ -748,6 +846,11 @@ export POD_NAME=$(kubectl get pods \
   -l "app.kubernetes.io/name=grafana,app.kubernetes.io/instance=grafana" \
   -o jsonpath="{.items[0].metadata.name}")
 kubectl --namespace grafana-ns port-forward $POD_NAME 3100:3000 &
+
+# KServe / Istio Ingress Gateway (Inferencia de Modelos)
+# Puerto local 8888 → puerto 80 del servicio istio-ingress
+INGRESS_GATEWAY_SERVICE=$(kubectl get svc -n istio-ingress --selector="app=istio-ingress" -o jsonpath='{.items[0].metadata.name}')
+kubectl port-forward -n istio-ingress svc/${INGRESS_GATEWAY_SERVICE} 8888:80 &
 ```
 
 Comandos para detener los procesos
@@ -756,6 +859,7 @@ Comandos para detener los procesos
 kill -9 $(lsof -t -i:8080)
 kill -9 $(lsof -t -i:30500)
 kill -9 $(lsof -t -i:3100)
+kill -9 $(lsof -t -i:8888)
 ```
 
 ---
