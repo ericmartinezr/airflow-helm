@@ -198,7 +198,7 @@ def iris():
 
                 model_info = sklearn.log_model(
                     sk_model=model,
-                    name="model",
+                    name="iris-model",
                     signature=signature,
                     input_example=X_test.iloc[:5],
                     registered_model_name=NOMBRE_MODELO,
@@ -221,7 +221,8 @@ def iris():
                     "dataset": "iris",
                     "pipeline": "airflow-ml-iris",
                 }.items():
-                    client.set_registered_model_tag(NOMBRE_MODELO, clave, valor)
+                    client.set_registered_model_tag(
+                        NOMBRE_MODELO, clave, valor)
 
                 # Descripción y etiquetas de esta versión
                 client.update_model_version(
@@ -234,8 +235,10 @@ def iris():
                 )
                 client.set_model_version_tag(
                     NOMBRE_MODELO, version, "run_id", run_id)
-                client.set_tag(run_id, "modelo.version_registrada", str(version))
-                client.set_tag(run_id, "modelo.nombre_registrado", NOMBRE_MODELO)
+                client.set_tag(
+                    run_id, "modelo.version_registrada", str(version))
+                client.set_tag(
+                    run_id, "modelo.nombre_registrado", NOMBRE_MODELO)
 
                 logger.info(
                     f"Modelo '{NOMBRE_MODELO}' v{version} registrado "
